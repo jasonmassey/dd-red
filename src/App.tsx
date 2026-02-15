@@ -1,4 +1,23 @@
+import { useEffect } from 'react';
+
+const SITES = [
+  'https://dev-dash-red.vercel.app',
+  'https://dev-dash-yellow.vercel.app',
+  'https://dev-dash-violet.vercel.app',
+];
+
 export default function App() {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === '~') {
+        const current = SITES.findIndex(s => location.origin === s);
+        window.location.href = SITES[(current + 1) % SITES.length];
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
   return (
     <div className="min-h-screen bg-surface flex items-center justify-center">
       <div className="max-w-2xl mx-auto px-6 text-center">
