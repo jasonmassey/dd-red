@@ -1,18 +1,9 @@
 import { useEffect } from 'react';
 
-const SITES = [
-  'https://dev-dash-red.vercel.app',
-  'https://dev-dash-yellow.vercel.app',
-  'https://dev-dash-violet.vercel.app',
-];
-
 export default function App() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === '~') {
-        const current = SITES.findIndex(s => location.origin === s);
-        window.location.href = SITES[(current + 1) % SITES.length];
-      }
+      if (e.key === '~') window.location.href = 'https://dev-dash-yellow.vercel.app';
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
