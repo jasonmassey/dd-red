@@ -7,6 +7,7 @@ interface AuthState {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  login: (user: User) => void;
   logout: () => void;
 }
 
@@ -14,6 +15,7 @@ const AuthContext = createContext<AuthState>({
   user: null,
   isLoading: true,
   isAuthenticated: false,
+  login: () => {},
   logout: () => {},
 });
 
@@ -37,6 +39,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const login = useCallback((u: User) => {
+    setUser(u);
+  }, []);
+
   const logout = useCallback(() => {
     clearToken();
     setUser(null);
@@ -48,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         isLoading,
         isAuthenticated: !!user,
+        login,
         logout,
       }}
     >

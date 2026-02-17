@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { KeyRound, Loader2, AlertCircle } from 'lucide-react';
-import { api, setToken } from '../lib/api';
+import { api, setToken, clearToken } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import type { User } from '../lib/types';
 
 export default function LoginPage() {
@@ -9,6 +10,7 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const { login } = useAuth();
 
   async function handleConnect(e: React.FormEvent) {
     e.preventDefault();
@@ -18,15 +20,15 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
 
-    // Temporarily set the token so api.get uses it
+    // Set the token so api.get uses it
     setToken(trimmed);
 
     const res = await api.get<User>('/auth/me');
     if (res.success && res.data) {
+      login(res.data);
       navigate('/');
     } else {
-      // Clear invalid token
-      localStorage.removeItem('dd_red_token');
+      clearToken();
       setError(res.error || 'Invalid token');
     }
 
