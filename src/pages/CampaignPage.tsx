@@ -56,7 +56,7 @@ function buildBeadTree(beads: Bead[]) {
   const children = new Map<string | undefined, Bead[]>();
 
   for (const bead of beads) {
-    const parent = bead.parentBeadId;
+    const parent = bead.parentBeadId || undefined; // normalize null → undefined
     if (!children.has(parent)) children.set(parent, []);
     children.get(parent)!.push(bead);
   }
