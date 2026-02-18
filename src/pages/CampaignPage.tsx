@@ -20,6 +20,7 @@ import {
   ClipboardCheck,
   AlertTriangle,
   Ban,
+  Copy,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useProjects } from '../hooks/useProjects';
@@ -613,10 +614,18 @@ function DrainSummaryPanel({
 }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const [showFailed, setShowFailed] = useState(false);
+  const [drainIdCopied, setDrainIdCopied] = useState(false);
 
   const completed = summary.jobs.filter((j) => j.status === 'completed');
   const failed = summary.jobs.filter((j) => j.status === 'failed');
   const failureGroups = useMemo(() => buildFailureGroups(failed), [failed]);
+
+  const handleCopyDrainId = () => {
+    if (!summary.drainId) return;
+    navigator.clipboard.writeText(summary.drainId);
+    setDrainIdCopied(true);
+    setTimeout(() => setDrainIdCopied(false), 1500);
+  };
 
   return (
     <div className="bg-surface-raised border-b border-surface-border">
@@ -626,6 +635,20 @@ function DrainSummaryPanel({
         <span className="text-sm font-medium text-text">
           Drain Complete — {summary.completedJobs} completed, {summary.failedJobs} failed
         </span>
+        {summary.drainId && (
+          <button
+            onClick={handleCopyDrainId}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface text-text-muted hover:text-text transition-colors"
+            title="Copy drain ID"
+          >
+            <span className="text-xs font-mono">{summary.drainId.slice(0, 8)}</span>
+            {drainIdCopied ? (
+              <Check className="w-3 h-3 text-green-400" />
+            ) : (
+              <Copy className="w-3 h-3" />
+            )}
+          </button>
+        )}
         <span className="text-xs text-text-muted">
           {new Date(summary.completedAt).toLocaleTimeString()}
         </span>
