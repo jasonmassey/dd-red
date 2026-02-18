@@ -21,6 +21,7 @@ import { useProjects } from '../hooks/useProjects';
 import { useBeads, useReadyBeads } from '../hooks/useBeads';
 import { useJobs, useCreateJob, useJobStats } from '../hooks/useJobs';
 import { useDrainStatus, useDrainPreview, useStartDrain, useStopDrain } from '../hooks/useDrain';
+import { BeadDetailPanel } from '../components/BeadDetailPanel';
 import type { Bead, Job, BeadStatus } from '../lib/types';
 
 const STATUS_ICON: Record<BeadStatus, typeof Circle> = {
@@ -82,6 +83,7 @@ function BeadRow({
   selectedIds,
   onToggleSelect,
   onDispatch,
+  onInspect,
   dispatchingId,
 }: {
   bead: Bead;
@@ -92,6 +94,7 @@ function BeadRow({
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
   onDispatch: (bead: Bead) => void;
+  onInspect: (bead: Bead) => void;
   dispatchingId: string | null;
 }) {
   const Icon = STATUS_ICON[bead.status];
@@ -123,7 +126,12 @@ function BeadRow({
         ) : (
           <Icon className={`w-4 h-4 flex-shrink-0 ${STATUS_COLOR[bead.status]}`} />
         )}
-        <span className="text-sm text-text truncate flex-1">{bead.subject}</span>
+        <span
+          className="text-sm text-text truncate flex-1 cursor-pointer hover:text-accent transition-colors"
+          onClick={() => onInspect(bead)}
+        >
+          {bead.subject}
+        </span>
         <span
           className={`text-xs px-1.5 py-0.5 rounded font-mono ${
             PRIORITY_COLOR[bead.priority] || PRIORITY_COLOR[4]
@@ -170,6 +178,7 @@ function BeadRow({
           selectedIds={selectedIds}
           onToggleSelect={onToggleSelect}
           onDispatch={onDispatch}
+          onInspect={onInspect}
           dispatchingId={dispatchingId}
         />
       ))}
@@ -228,6 +237,7 @@ function SelectionReview({
   beads,
   onRemove,
   onClear,
+  onInspect,
   collapsed,
   onToggleCollapse,
 }: {
@@ -235,6 +245,7 @@ function SelectionReview({
   beads: Bead[];
   onRemove: (id: string) => void;
   onClear: () => void;
+  onInspect: (bead: Bead) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
 }) {
@@ -277,7 +288,12 @@ function SelectionReview({
               >
                 {PRIORITY_LABEL[bead.priority] ?? `P${bead.priority}`}
               </span>
-              <span className="text-sm text-text truncate flex-1">{bead.subject}</span>
+              <span
+                className="text-sm text-text truncate flex-1 cursor-pointer hover:text-accent transition-colors"
+                onClick={() => onInspect(bead)}
+              >
+                {bead.subject}
+              </span>
               {bead.beadType && (
                 <span className="text-xs text-text-muted">{bead.beadType}</span>
               )}
@@ -303,6 +319,7 @@ export default function CampaignPage() {
   const [dispatchingId, setDispatchingId] = useState<string | null>(null);
   const [selectedBeadIds, setSelectedBeadIds] = useState<Set<string>>(new Set());
   const [reviewCollapsed, setReviewCollapsed] = useState(false);
+  const [inspectedBeadId, setInspectedBeadId] = useState<string | null>(null);
 
   // Auto-select first project
   const projectId = selectedProjectId || projects?.[0]?.id || '';
@@ -406,6 +423,7 @@ export default function CampaignPage() {
 
   const rootBeads = tree.children.get(undefined) || [];
   const selectedProject = projects?.find((p) => p.id === projectId);
+  const inspectedBead = inspectedBeadId ? beads?.find((b) => b.id === inspectedBeadId) || null : null;
 
   return (
     <div className="h-screen flex flex-col bg-surface text-text">
@@ -540,6 +558,7 @@ export default function CampaignPage() {
           beads={beads || []}
           onRemove={(id) => toggleSelect(id)}
           onClear={clearSelection}
+          onInspect={(bead) => setInspectedBeadId(bead.id)}
           collapsed={reviewCollapsed}
           onToggleCollapse={() => setReviewCollapsed(!reviewCollapsed)}
         />
@@ -579,6 +598,7 @@ export default function CampaignPage() {
                   selectedIds={selectedBeadIds}
                   onToggleSelect={toggleSelect}
                   onDispatch={handleDispatch}
+                  onInspect={(b) => setInspectedBeadId(b.id)}
                   dispatchingId={dispatchingId}
                 />
               ))}
@@ -586,14 +606,27 @@ export default function CampaignPage() {
           )}
         </div>
 
-        {/* Job feed - right panel */}
-        <div className="w-80 overflow-y-auto">
-          <div className="px-3 py-2 border-b border-surface-border">
-            <span className="text-xs font-mono text-text-muted uppercase tracking-wider">
-              Job Feed
-            </span>
-          </div>
-          <JobFeed jobs={jobs || []} />
+        {/* Right panel: detail view or job feed */}
+        <div className="w-96 overflow-hidden flex flex-col">
+          {inspectedBead ? (
+            <BeadDetailPanel
+              bead={inspectedBead}
+              allBeads={beads || []}
+              jobs={jobs || []}
+              onBack={() => setInspectedBeadId(null)}
+            />
+          ) : (
+            <>
+              <div className="px-3 py-2 border-b border-surface-border">
+                <span className="text-xs font-mono text-text-muted uppercase tracking-wider">
+                  Job Feed
+                </span>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                <JobFeed jobs={jobs || []} />
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
