@@ -64,6 +64,7 @@ export interface Job {
   id: string;
   project_id: string;
   bead_id?: string;
+  drain_id?: string;
   prompt: string;
   status: JobStatus;
   worker_type: WorkerType;
@@ -144,6 +145,7 @@ export interface DrainSummaryJob {
 
 export interface DrainSummary {
   projectId: string;
+  drainId?: string;
   startedAt: string;
   completedAt: string;
   totalJobs: number;
@@ -151,4 +153,22 @@ export interface DrainSummary {
   failedJobs: number;
   jobs: DrainSummaryJob[];
   smokeTestChecklist: string | null;
+}
+
+export interface Drain {
+  id: string;
+  project_id: string;
+  status: 'running' | 'completed' | 'stopped';
+  scope_size: number;
+  max_jobs: number;
+  started_at: string;
+  completed_at?: string;
+  total_jobs: number;
+  completed_jobs: number;
+  failed_jobs: number;
+  smoke_test_checklist?: string;
+}
+
+export interface DrainDetail extends Drain {
+  jobs: Job[];
 }

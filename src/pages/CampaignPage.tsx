@@ -19,6 +19,7 @@ import {
   ExternalLink,
   ClipboardCheck,
   AlertTriangle,
+  Ban,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useProjects } from '../hooks/useProjects';
@@ -26,7 +27,16 @@ import { useBeads, useReadyBeads } from '../hooks/useBeads';
 import { useJobs, useCreateJob, useJobStats } from '../hooks/useJobs';
 import { useDrainStatus, useDrainPreview, useDrainSummary, useStartDrain, useStopDrain } from '../hooks/useDrain';
 import { BeadDetailPanel } from '../components/BeadDetailPanel';
-import type { Bead, Job, BeadStatus, DrainSummary as DrainSummaryType } from '../lib/types';
+import { JobDetailPanel } from '../components/JobDetailPanel';
+import { DrainDetailPanel } from '../components/DrainDetailPanel';
+import type { Bead, Job, BeadStatus, JobStatus, DrainSummary as DrainSummaryType } from '../lib/types';
+
+// -- Right panel discriminated union --
+type RightPanel =
+  | { kind: 'feed' }
+  | { kind: 'beadDetail'; beadId: string }
+  | { kind: 'jobDetail'; jobId: string }
+  | { kind: 'drainDetail'; drainId: string };
 
 const STATUS_ICON: Record<BeadStatus, typeof Circle> = {
   pending: Circle,
@@ -58,6 +68,14 @@ const PRIORITY_COLOR: Record<number, string> = {
   2: 'bg-yellow-500/20 text-yellow-400',
   3: 'bg-blue-500/20 text-blue-400',
   4: 'bg-text-muted/20 text-text-muted',
+};
+
+const JOB_DOT_COLOR: Record<JobStatus, string> = {
+  running: 'bg-yellow-400 animate-pulse',
+  queued: 'bg-blue-400',
+  completed: 'bg-green-400',
+  failed: 'bg-red-400',
+  cancelled: 'bg-text-muted',
 };
 
 function buildBeadTree(beads: Bead[]) {
@@ -190,8 +208,104 @@ function BeadRow({
   );
 }
 
-function JobFeed({ jobs }: { jobs: Job[] }) {
-  const recent = jobs.slice(0, 20);
+// -- Enhanced Job Feed with drain grouping --
+
+type FeedItem =
+  | { kind: 'job'; job: Job }
+  | { kind: 'drainGroup'; drainId: string; jobs: Job[] };
+
+function groupJobsIntoDrainGroups(jobs: Job[]): FeedItem[] {
+  const items: FeedItem[] = [];
+  let currentDrainId: string | null = null;
+  let currentDrainJobs: Job[] = [];
+
+  for (const job of jobs) {
+    if (job.drain_id) {
+      if (job.drain_id === currentDrainId) {
+        currentDrainJobs.push(job);
+      } else {
+        // Flush previous drain group
+        if (currentDrainId && currentDrainJobs.length > 0) {
+          items.push({ kind: 'drainGroup', drainId: currentDrainId, jobs: currentDrainJobs });
+        }
+        currentDrainId = job.drain_id;
+        currentDrainJobs = [job];
+      }
+    } else {
+      // Flush any pending drain group
+      if (currentDrainId && currentDrainJobs.length > 0) {
+        items.push({ kind: 'drainGroup', drainId: currentDrainId, jobs: currentDrainJobs });
+        currentDrainId = null;
+        currentDrainJobs = [];
+      }
+      items.push({ kind: 'job', job });
+    }
+  }
+
+  // Flush remaining drain group
+  if (currentDrainId && currentDrainJobs.length > 0) {
+    items.push({ kind: 'drainGroup', drainId: currentDrainId, jobs: currentDrainJobs });
+  }
+
+  return items;
+}
+
+function JobCard({
+  job,
+  beadMap,
+  onClick,
+  indented,
+}: {
+  job: Job;
+  beadMap: Map<string, Bead>;
+  onClick: () => void;
+  indented?: boolean;
+}) {
+  const bead = job.bead_id ? beadMap.get(job.bead_id) : null;
+  const result = job.result;
+  const duration = result?.durationMs ? `${Math.round(result.durationMs / 1000)}s` : null;
+
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left flex items-center gap-2 py-1.5 px-3 text-sm rounded hover:bg-surface-raised/50 transition-colors ${
+        indented ? 'pl-6' : ''
+      }`}
+    >
+      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${JOB_DOT_COLOR[job.status]}`} />
+      <span className="text-text truncate flex-1">
+        {bead ? bead.subject : job.prompt.slice(0, 60)}
+      </span>
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        {result?.prUrl && (
+          <span className="text-xs text-accent">PR</span>
+        )}
+        {result?.testResults && (
+          <span className={`text-xs ${result.testResults.passed ? 'text-green-400' : 'text-red-400'}`}>
+            {result.testResults.passed ? 'pass' : 'fail'}
+          </span>
+        )}
+        {duration && (
+          <span className="text-xs text-text-muted font-mono">{duration}</span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function JobFeed({
+  jobs,
+  beadMap,
+  onClickJob,
+  onClickDrainGroup,
+}: {
+  jobs: Job[];
+  beadMap: Map<string, Bead>;
+  onClickJob: (jobId: string) => void;
+  onClickDrainGroup: (drainId: string) => void;
+}) {
+  const recent = jobs.slice(0, 50);
+  const feedItems = useMemo(() => groupJobsIntoDrainGroups(recent), [recent]);
 
   if (recent.length === 0) {
     return (
@@ -202,130 +316,55 @@ function JobFeed({ jobs }: { jobs: Job[] }) {
   }
 
   return (
-    <div className="space-y-1">
-      {recent.map((job) => (
-        <div
-          key={job.id}
-          className="flex items-center gap-2 py-1.5 px-3 text-sm rounded hover:bg-surface-raised/50"
-        >
-          <span
-            className={`w-2 h-2 rounded-full flex-shrink-0 ${
-              job.status === 'running'
-                ? 'bg-yellow-400 animate-pulse'
-                : job.status === 'queued'
-                  ? 'bg-blue-400'
-                  : job.status === 'completed'
-                    ? 'bg-green-400'
-                    : job.status === 'failed'
-                      ? 'bg-red-400'
-                      : 'bg-text-muted'
-            }`}
-          />
-          <span className="text-text truncate flex-1 font-mono text-xs">
-            {job.id.slice(0, 8)}
-          </span>
-          <span className="text-text-muted text-xs truncate max-w-[200px]">
-            {job.prompt.slice(0, 60)}
-          </span>
-          <span className="text-text-muted text-xs font-mono">
-            {job.status}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
+    <div className="space-y-0.5 py-1">
+      {feedItems.map((item) => {
+        if (item.kind === 'job') {
+          return (
+            <JobCard
+              key={item.job.id}
+              job={item.job}
+              beadMap={beadMap}
+              onClick={() => onClickJob(item.job.id)}
+            />
+          );
+        }
 
-function CompletedJobsView({ jobs, allBeads }: { jobs: Job[]; allBeads: Bead[] }) {
-  const beadMap = new Map(allBeads.map((b) => [b.id, b]));
-
-  if (jobs.length === 0) {
-    return (
-      <div className="text-text-muted text-sm text-center py-8">
-        No completed jobs yet.
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      {jobs.map((job) => {
-        const bead = job.bead_id ? beadMap.get(job.bead_id) : null;
-        const duration = job.result?.durationMs
-          ? `${Math.round(job.result.durationMs / 1000)}s`
-          : null;
-        const completedAt = job.completed_at
-          ? new Date(job.completed_at).toLocaleString()
-          : null;
+        // Drain group
+        const { drainId, jobs: drainJobs } = item;
+        const completed = drainJobs.filter((j) => j.status === 'completed').length;
+        const failed = drainJobs.filter((j) => j.status === 'failed').length;
+        const running = drainJobs.filter((j) => j.status === 'running').length;
 
         return (
-          <div
-            key={job.id}
-            className="p-3 bg-surface-raised/50 rounded space-y-2 hover:bg-surface-raised transition-colors"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex-1 min-w-0">
-                {bead && (
-                  <div className="text-sm font-medium text-text truncate">
-                    {bead.subject}
-                  </div>
-                )}
-                <div className="text-xs text-text-muted truncate">
-                  {job.prompt || 'No prompt'}
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {duration && (
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-mono">
-                    {duration}
-                  </span>
-                )}
-                <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">
-                  ✓ Completed
-                </span>
-              </div>
-            </div>
+          <div key={`drain-${drainId}`} className="relative">
+            {/* Left accent bracket */}
+            <div className="absolute left-1 top-0 bottom-0 w-0.5 bg-accent/40 rounded-full" />
 
-            {job.result && (
-              <div className="flex items-center gap-3 text-xs">
-                {job.result.prUrl && (
-                  <a
-                    href={job.result.prUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-accent hover:underline flex items-center gap-1"
-                  >
-                    <GitBranch className="w-3 h-3" />
-                    View PR
-                  </a>
-                )}
-                {job.result.testResults && (
-                  <span
-                    className={`flex items-center gap-1 ${
-                      job.result.testResults.passed
-                        ? 'text-green-400'
-                        : 'text-orange-400'
-                    }`}
-                  >
-                    {job.result.testResults.passed ? (
-                      <CheckCircle2 className="w-3 h-3" />
-                    ) : (
-                      <XCircle className="w-3 h-3" />
-                    )}
-                    {job.result.testResults.summary}
-                  </span>
-                )}
-                <span className="text-text-muted">
-                  {job.worker_type}
-                </span>
+            {/* Drain header — clickable */}
+            <button
+              onClick={() => onClickDrainGroup(drainId)}
+              className="w-full text-left flex items-center gap-2 py-1.5 px-3 pl-4 text-xs hover:bg-surface-raised/50 rounded transition-colors"
+            >
+              <Zap className="w-3.5 h-3.5 text-accent" />
+              <span className="text-accent font-medium">Drain</span>
+              <span className="text-text-muted">{drainJobs.length} jobs</span>
+              <div className="flex items-center gap-2 ml-auto text-xs font-mono">
+                {completed > 0 && <span className="text-green-400">{completed} ok</span>}
+                {failed > 0 && <span className="text-red-400">{failed} fail</span>}
+                {running > 0 && <span className="text-yellow-400">{running} run</span>}
               </div>
-            )}
+            </button>
 
-            {completedAt && (
-              <div className="text-xs text-text-muted">
-                Completed {completedAt}
-              </div>
-            )}
+            {/* Drain jobs (indented) */}
+            {drainJobs.map((job) => (
+              <JobCard
+                key={job.id}
+                job={job}
+                beadMap={beadMap}
+                onClick={() => onClickJob(job.id)}
+                indented
+              />
+            ))}
           </div>
         );
       })}
@@ -546,7 +585,7 @@ export default function CampaignPage() {
   const [dispatchingId, setDispatchingId] = useState<string | null>(null);
   const [selectedBeadIds, setSelectedBeadIds] = useState<Set<string>>(new Set());
   const [reviewCollapsed, setReviewCollapsed] = useState(false);
-  const [inspectedBeadId, setInspectedBeadId] = useState<string | null>(null);
+  const [rightPanel, setRightPanel] = useState<RightPanel>({ kind: 'feed' });
   const [summaryDismissed, setSummaryDismissed] = useState(false);
 
   // Auto-select first project
@@ -572,11 +611,13 @@ export default function CampaignPage() {
   const tree = useMemo(() => buildBeadTree(beads || []), [beads]);
   const readyIds = useMemo(() => new Set(readyBeads.map((b) => b.id)), [readyBeads]);
 
-  // Map bead_id to most recent job
+  // Map bead_id to bead for the feed
+  const beadMap = useMemo(() => new Map((beads || []).map((b) => [b.id, b])), [beads]);
+
+  // Map bead_id to most recent job (for bead tree status badges)
   const jobMap = useMemo(() => {
     const m = new Map<string, Job>();
     if (!jobs) return m;
-    // Jobs are returned newest first, so first match per bead_id wins
     for (const job of jobs) {
       if (job.bead_id && !m.has(job.bead_id)) {
         m.set(job.bead_id, job);
@@ -619,13 +660,11 @@ export default function CampaignPage() {
     }
 
     if (selectedBeadIds.size > 0) {
-      // Drain selected beads
       startDrain.mutate({
         projectId,
         beadIds: Array.from(selectedBeadIds),
       });
     } else {
-      // Auto-select mode
       startDrain.mutate({
         projectId,
         autoSelect: true,
@@ -655,7 +694,14 @@ export default function CampaignPage() {
 
   const rootBeads = tree.children.get(undefined) || [];
   const selectedProject = projects?.find((p) => p.id === projectId);
-  const inspectedBead = inspectedBeadId ? beads?.find((b) => b.id === inspectedBeadId) || null : null;
+
+  // Resolve right panel data
+  const inspectedJob = rightPanel.kind === 'jobDetail'
+    ? jobs?.find((j) => j.id === rightPanel.jobId) || null
+    : null;
+  const inspectedBead = rightPanel.kind === 'beadDetail'
+    ? beads?.find((b) => b.id === rightPanel.beadId) || null
+    : null;
 
   return (
     <div className="h-screen flex flex-col bg-surface text-text">
@@ -672,6 +718,7 @@ export default function CampaignPage() {
             onChange={(e) => {
               setSelectedProjectId(e.target.value);
               setSelectedBeadIds(new Set());
+              setRightPanel({ kind: 'feed' });
             }}
             className="appearance-none bg-surface-raised border border-surface-border rounded px-3 py-1.5 pr-8 text-sm text-text focus:outline-none focus:border-accent/50"
           >
@@ -798,7 +845,7 @@ export default function CampaignPage() {
           beads={beads || []}
           onRemove={(id) => toggleSelect(id)}
           onClear={clearSelection}
-          onInspect={(bead) => setInspectedBeadId(bead.id)}
+          onInspect={(bead) => setRightPanel({ kind: 'beadDetail', beadId: bead.id })}
           collapsed={reviewCollapsed}
           onToggleCollapse={() => setReviewCollapsed(!reviewCollapsed)}
         />
@@ -838,7 +885,7 @@ export default function CampaignPage() {
                   selectedIds={selectedBeadIds}
                   onToggleSelect={toggleSelect}
                   onDispatch={handleDispatch}
-                  onInspect={(b) => setInspectedBeadId(b.id)}
+                  onInspect={(b) => setRightPanel({ kind: 'beadDetail', beadId: b.id })}
                   dispatchingId={dispatchingId}
                 />
               ))}
@@ -846,14 +893,28 @@ export default function CampaignPage() {
           )}
         </div>
 
-        {/* Right panel: detail view or job feed */}
+        {/* Right panel: state machine */}
         <div className="w-96 overflow-hidden flex flex-col">
-          {inspectedBead ? (
+          {rightPanel.kind === 'beadDetail' && inspectedBead ? (
             <BeadDetailPanel
               bead={inspectedBead}
               allBeads={beads || []}
               jobs={jobs || []}
-              onBack={() => setInspectedBeadId(null)}
+              onBack={() => setRightPanel({ kind: 'feed' })}
+            />
+          ) : rightPanel.kind === 'jobDetail' && inspectedJob ? (
+            <JobDetailPanel
+              job={inspectedJob}
+              bead={inspectedJob.bead_id ? beadMap.get(inspectedJob.bead_id) : null}
+              onBack={() => setRightPanel({ kind: 'feed' })}
+              onClickBead={(beadId) => setRightPanel({ kind: 'beadDetail', beadId })}
+            />
+          ) : rightPanel.kind === 'drainDetail' ? (
+            <DrainDetailPanel
+              projectId={projectId}
+              drainId={rightPanel.drainId}
+              onBack={() => setRightPanel({ kind: 'feed' })}
+              onClickJob={(jobId) => setRightPanel({ kind: 'jobDetail', jobId })}
             />
           ) : (
             <>
@@ -863,7 +924,12 @@ export default function CampaignPage() {
                 </span>
               </div>
               <div className="flex-1 overflow-y-auto">
-                <JobFeed jobs={jobs || []} />
+                <JobFeed
+                  jobs={jobs || []}
+                  beadMap={beadMap}
+                  onClickJob={(jobId) => setRightPanel({ kind: 'jobDetail', jobId })}
+                  onClickDrainGroup={(drainId) => setRightPanel({ kind: 'drainDetail', drainId })}
+                />
               </div>
             </>
           )}

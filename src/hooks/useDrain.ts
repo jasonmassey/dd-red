@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import type { DrainStatus, DrainPreview, DrainStartResult, DrainSummary } from '../lib/types';
+import type { DrainStatus, DrainPreview, DrainStartResult, DrainSummary, DrainDetail } from '../lib/types';
 
 export function useDrainStatus(projectId: string) {
   return useQuery({
@@ -76,6 +76,20 @@ export function useStartDrain() {
       queryClient.invalidateQueries({ queryKey: ['jobStats'] });
       queryClient.invalidateQueries({ queryKey: ['beads'] });
     },
+  });
+}
+
+export function useDrainDetail(projectId: string, drainId: string | null) {
+  return useQuery({
+    queryKey: ['drainDetail', projectId, drainId],
+    queryFn: async () => {
+      const response = await api.get<DrainDetail>(
+        `/projects/${projectId}/drains/${drainId}`
+      );
+      if (!response.success) throw new Error(response.error);
+      return response.data!;
+    },
+    enabled: !!projectId && !!drainId,
   });
 }
 
