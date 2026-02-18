@@ -1,19 +1,22 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import type { Job, JobStats, WorkerType, PaginatedResponse } from '../lib/types';
+import type { Job, JobStats, WorkerType, PaginatedResponse, JobStatus } from '../lib/types';
 
-export function useJobs(projectId?: string) {
+export function useJobs(projectId?: string, status?: JobStatus) {
   return useQuery({
-    queryKey: ['jobs', projectId],
+    queryKey: ['jobs', projectId, status],
     queryFn: async () => {
-      const endpoint = projectId ? `/jobs?projectId=${projectId}` : '/jobs';
+      const params = new URLSearchParams();
+      if (projectId) params.append('projectId', projectId);
+      if (status) params.append('status', status);
+      const endpoint = `/jobs${params.toString() ? `?${params.toString()}` : ''}`;
       const response = await api.get<PaginatedResponse<Job>>(endpoint);
       if (!response.success) {
         throw new Error(response.error);
       }
       return response.data!.data;
     },
-    refetchInterval: 10_000,
+    refetchInterval: status === 'completed' ? false : 10_000,
   });
 }
 
