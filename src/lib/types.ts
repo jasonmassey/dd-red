@@ -127,3 +127,28 @@ export interface DrainStartResult {
   scopeSize: number;
   readyBeads: { id: string; subject: string; priority: number }[];
 }
+
+export interface DrainSummaryJob {
+  jobId: string;
+  beadId?: string;
+  subject: string;
+  status: 'completed' | 'failed';
+  prUrl?: string;
+  branchName?: string;
+  summary?: string;
+  testResults?: { ran: boolean; passed: boolean; summary: string };
+  failureCategory?: string;
+  failureTitle?: string;
+  failureSummary?: string;
+}
+
+export interface DrainSummary {
+  projectId: string;
+  startedAt: string;
+  completedAt: string;
+  totalJobs: number;
+  completedJobs: number;
+  failedJobs: number;
+  jobs: DrainSummaryJob[];
+  smokeTestChecklist: string | null;
+}

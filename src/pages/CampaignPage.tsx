@@ -15,14 +15,17 @@ import {
   Sparkles,
   Check,
   X,
+  ExternalLink,
+  ClipboardCheck,
+  AlertTriangle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useProjects } from '../hooks/useProjects';
 import { useBeads, useReadyBeads } from '../hooks/useBeads';
 import { useJobs, useCreateJob, useJobStats } from '../hooks/useJobs';
-import { useDrainStatus, useDrainPreview, useStartDrain, useStopDrain } from '../hooks/useDrain';
+import { useDrainStatus, useDrainPreview, useDrainSummary, useStartDrain, useStopDrain } from '../hooks/useDrain';
 import { BeadDetailPanel } from '../components/BeadDetailPanel';
-import type { Bead, Job, BeadStatus } from '../lib/types';
+import type { Bead, Job, BeadStatus, DrainSummary as DrainSummaryType } from '../lib/types';
 
 const STATUS_ICON: Record<BeadStatus, typeof Circle> = {
   pending: Circle,
@@ -312,6 +315,132 @@ function SelectionReview({
   );
 }
 
+function DrainSummaryPanel({
+  summary,
+  onDismiss,
+}: {
+  summary: DrainSummaryType;
+  onDismiss: () => void;
+}) {
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [showFailed, setShowFailed] = useState(false);
+
+  const completed = summary.jobs.filter((j) => j.status === 'completed');
+  const failed = summary.jobs.filter((j) => j.status === 'failed');
+
+  return (
+    <div className="bg-surface-raised border-b border-surface-border">
+      {/* Header */}
+      <div className="px-4 py-3 flex items-center gap-3">
+        <ClipboardCheck className="w-5 h-5 text-green-400" />
+        <span className="text-sm font-medium text-text">
+          Drain Complete — {summary.completedJobs} completed, {summary.failedJobs} failed
+        </span>
+        <span className="text-xs text-text-muted">
+          {new Date(summary.completedAt).toLocaleTimeString()}
+        </span>
+        <button
+          onClick={onDismiss}
+          className="ml-auto text-text-muted hover:text-text transition-colors"
+          title="Dismiss"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Completed jobs */}
+      {completed.length > 0 && (
+        <div className="border-t border-surface-border/50">
+          <button
+            onClick={() => setShowCompleted(!showCompleted)}
+            className="w-full px-4 py-2 flex items-center gap-2 text-xs hover:bg-surface-raised/80 transition-colors"
+          >
+            {showCompleted ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            <CheckCircle2 className="w-3 h-3 text-green-400" />
+            <span className="text-green-400">{completed.length} completed</span>
+          </button>
+          {showCompleted && (
+            <div className="px-4 pb-3 space-y-1 max-h-48 overflow-y-auto">
+              {completed.map((job) => (
+                <div key={job.jobId} className="flex items-center gap-2 py-1 px-2 rounded text-xs hover:bg-surface/50">
+                  <span className="text-text truncate flex-1">{job.subject}</span>
+                  {job.testResults && (
+                    <span className={`px-1.5 py-0.5 rounded font-mono ${
+                      job.testResults.passed ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                    }`}>
+                      {job.testResults.passed ? 'tests pass' : 'tests fail'}
+                    </span>
+                  )}
+                  {job.prUrl && (
+                    <a
+                      href={job.prUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-accent hover:text-accent/80 flex items-center gap-1"
+                    >
+                      PR <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Failed jobs */}
+      {failed.length > 0 && (
+        <div className="border-t border-surface-border/50">
+          <button
+            onClick={() => setShowFailed(!showFailed)}
+            className="w-full px-4 py-2 flex items-center gap-2 text-xs hover:bg-surface-raised/80 transition-colors"
+          >
+            {showFailed ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            <AlertTriangle className="w-3 h-3 text-red-400" />
+            <span className="text-red-400">{failed.length} failed</span>
+          </button>
+          {showFailed && (
+            <div className="px-4 pb-3 space-y-1 max-h-48 overflow-y-auto">
+              {failed.map((job) => (
+                <div key={job.jobId} className="py-1 px-2 rounded text-xs hover:bg-surface/50">
+                  <div className="flex items-center gap-2">
+                    <span className="text-text truncate flex-1">{job.subject}</span>
+                    {job.failureCategory && (
+                      <span className="px-1.5 py-0.5 rounded font-mono bg-red-500/20 text-red-400">
+                        {job.failureCategory}
+                      </span>
+                    )}
+                  </div>
+                  {job.failureTitle && (
+                    <div className="text-text-muted mt-0.5 pl-2">{job.failureTitle}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Smoke test checklist */}
+      {summary.smokeTestChecklist ? (
+        <div className="border-t border-surface-border/50 px-4 py-3">
+          <div className="text-xs font-mono text-text-muted uppercase tracking-wider mb-2">
+            AI Smoke Test Checklist
+          </div>
+          <div className="text-sm text-text whitespace-pre-wrap leading-relaxed">
+            {summary.smokeTestChecklist}
+          </div>
+        </div>
+      ) : (
+        <div className="border-t border-surface-border/50 px-4 py-2 flex items-center gap-2 text-xs text-text-muted">
+          <RefreshCw className="w-3 h-3 animate-spin" />
+          Generating smoke test checklist...
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CampaignPage() {
   const { user, logout } = useAuth();
   const { data: projects } = useProjects();
@@ -320,6 +449,7 @@ export default function CampaignPage() {
   const [selectedBeadIds, setSelectedBeadIds] = useState<Set<string>>(new Set());
   const [reviewCollapsed, setReviewCollapsed] = useState(false);
   const [inspectedBeadId, setInspectedBeadId] = useState<string | null>(null);
+  const [summaryDismissed, setSummaryDismissed] = useState(false);
 
   // Auto-select first project
   const projectId = selectedProjectId || projects?.[0]?.id || '';
@@ -337,6 +467,9 @@ export default function CampaignPage() {
   const stopDrain = useStopDrain();
 
   const isDraining = drainStatus?.active ?? false;
+
+  // Fetch summary when drain is not active (and not dismissed)
+  const { data: drainSummary } = useDrainSummary(projectId, !isDraining && !summaryDismissed);
 
   const tree = useMemo(() => buildBeadTree(beads || []), [beads]);
   const readyIds = useMemo(() => new Set(readyBeads.map((b) => b.id)), [readyBeads]);
@@ -402,6 +535,7 @@ export default function CampaignPage() {
       });
     }
     setSelectedBeadIds(new Set());
+    setSummaryDismissed(false);
   }
 
   async function handleDispatch(bead: Bead) {
@@ -549,6 +683,14 @@ export default function CampaignPage() {
             Close this tab — the server keeps going
           </span>
         </div>
+      )}
+
+      {/* Drain summary panel */}
+      {!isDraining && !summaryDismissed && drainSummary && (
+        <DrainSummaryPanel
+          summary={drainSummary}
+          onDismiss={() => setSummaryDismissed(true)}
+        />
       )}
 
       {/* Selection review panel */}
