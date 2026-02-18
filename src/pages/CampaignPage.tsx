@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Lock,
   XCircle,
+  GitBranch,
   ChevronDown,
   ChevronUp,
   LogOut,
@@ -231,6 +232,103 @@ function JobFeed({ jobs }: { jobs: Job[] }) {
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function CompletedJobsView({ jobs, allBeads }: { jobs: Job[]; allBeads: Bead[] }) {
+  const beadMap = new Map(allBeads.map((b) => [b.id, b]));
+
+  if (jobs.length === 0) {
+    return (
+      <div className="text-text-muted text-sm text-center py-8">
+        No completed jobs yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {jobs.map((job) => {
+        const bead = job.bead_id ? beadMap.get(job.bead_id) : null;
+        const duration = job.result?.durationMs
+          ? `${Math.round(job.result.durationMs / 1000)}s`
+          : null;
+        const completedAt = job.completed_at
+          ? new Date(job.completed_at).toLocaleString()
+          : null;
+
+        return (
+          <div
+            key={job.id}
+            className="p-3 bg-surface-raised/50 rounded space-y-2 hover:bg-surface-raised transition-colors"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                {bead && (
+                  <div className="text-sm font-medium text-text truncate">
+                    {bead.subject}
+                  </div>
+                )}
+                <div className="text-xs text-text-muted truncate">
+                  {job.prompt || 'No prompt'}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {duration && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-mono">
+                    {duration}
+                  </span>
+                )}
+                <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">
+                  ✓ Completed
+                </span>
+              </div>
+            </div>
+
+            {job.result && (
+              <div className="flex items-center gap-3 text-xs">
+                {job.result.prUrl && (
+                  <a
+                    href={job.result.prUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accent hover:underline flex items-center gap-1"
+                  >
+                    <GitBranch className="w-3 h-3" />
+                    View PR
+                  </a>
+                )}
+                {job.result.testResults && (
+                  <span
+                    className={`flex items-center gap-1 ${
+                      job.result.testResults.passed
+                        ? 'text-green-400'
+                        : 'text-orange-400'
+                    }`}
+                  >
+                    {job.result.testResults.passed ? (
+                      <CheckCircle2 className="w-3 h-3" />
+                    ) : (
+                      <XCircle className="w-3 h-3" />
+                    )}
+                    {job.result.testResults.summary}
+                  </span>
+                )}
+                <span className="text-text-muted">
+                  {job.worker_type}
+                </span>
+              </div>
+            )}
+
+            {completedAt && (
+              <div className="text-xs text-text-muted">
+                Completed {completedAt}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
