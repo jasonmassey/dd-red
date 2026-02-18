@@ -104,3 +104,26 @@ export interface PaginatedResponse<T> {
   nextCursor: string | null;
   hasMore: boolean;
 }
+
+export interface DrainStatus {
+  active: boolean;
+  projectId: string;
+  scopeSize: number;
+  jobsCreated: number;
+  maxJobs: number;
+  startedAt: string | null;
+  readyCount: number;
+}
+
+export interface DrainPreview {
+  candidates: { id: string; subject: string; priority: number }[];
+  count: number;
+}
+
+export interface DrainStartResult {
+  success: boolean;
+  active: boolean;
+  jobsCreated: string[];
+  scopeSize: number;
+  readyBeads: { id: string; subject: string; priority: number }[];
+}

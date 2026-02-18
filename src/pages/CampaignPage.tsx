@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import {
   Play,
   Zap,
-  ZapOff,
+  Square,
   Circle,
   Clock,
   CheckCircle2,
@@ -11,12 +11,14 @@ import {
   ChevronDown,
   LogOut,
   RefreshCw,
+  Sparkles,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useProjects } from '../hooks/useProjects';
 import { useBeads, useReadyBeads } from '../hooks/useBeads';
 import { useJobs, useCreateJob, useJobStats } from '../hooks/useJobs';
-import { useAutoDispatch } from '../hooks/useAutoDispatch';
+import { useDrainStatus, useDrainPreview, useStartDrain, useStopDrain } from '../hooks/useDrain';
 import type { Bead, Job, BeadStatus } from '../lib/types';
 
 const STATUS_ICON: Record<BeadStatus, typeof Circle> = {
@@ -75,6 +77,8 @@ function BeadRow({
   children: childBeads,
   jobMap,
   readyIds,
+  selectedIds,
+  onToggleSelect,
   onDispatch,
   dispatchingId,
 }: {
@@ -83,11 +87,14 @@ function BeadRow({
   children: Map<string | undefined, Bead[]>;
   jobMap: Map<string, Job>;
   readyIds: Set<string>;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
   onDispatch: (bead: Bead) => void;
   dispatchingId: string | null;
 }) {
   const Icon = STATUS_ICON[bead.status];
   const isReady = readyIds.has(bead.id);
+  const isSelected = selectedIds.has(bead.id);
   const activeJob = jobMap.get(bead.id);
   const kids = childBeads.get(bead.id) || [];
 
@@ -96,10 +103,24 @@ function BeadRow({
       <div
         className={`flex items-center gap-2 py-1.5 px-3 hover:bg-surface-raised/50 rounded group ${
           isReady ? 'border-l-2 border-green-500' : ''
-        }`}
+        } ${isSelected ? 'bg-accent/5' : ''}`}
         style={{ paddingLeft: `${depth * 20 + 12}px` }}
       >
-        <Icon className={`w-4 h-4 flex-shrink-0 ${STATUS_COLOR[bead.status]}`} />
+        {/* Selection checkbox for ready beads */}
+        {isReady && !activeJob ? (
+          <button
+            onClick={() => onToggleSelect(bead.id)}
+            className={`w-4 h-4 flex-shrink-0 rounded border transition-colors ${
+              isSelected
+                ? 'bg-accent border-accent text-white'
+                : 'border-surface-border hover:border-accent/50'
+            } flex items-center justify-center`}
+          >
+            {isSelected && <Check className="w-3 h-3" />}
+          </button>
+        ) : (
+          <Icon className={`w-4 h-4 flex-shrink-0 ${STATUS_COLOR[bead.status]}`} />
+        )}
         <span className="text-sm text-text truncate flex-1">{bead.subject}</span>
         <span
           className={`text-xs px-1.5 py-0.5 rounded font-mono ${
@@ -144,6 +165,8 @@ function BeadRow({
           children={childBeads}
           jobMap={jobMap}
           readyIds={readyIds}
+          selectedIds={selectedIds}
+          onToggleSelect={onToggleSelect}
           onDispatch={onDispatch}
           dispatchingId={dispatchingId}
         />
@@ -202,8 +225,8 @@ export default function CampaignPage() {
   const { user, logout } = useAuth();
   const { data: projects } = useProjects();
   const [selectedProjectId, setSelectedProjectId] = useState('');
-  const [drainEnabled, setDrainEnabled] = useState(false);
   const [dispatchingId, setDispatchingId] = useState<string | null>(null);
+  const [selectedBeadIds, setSelectedBeadIds] = useState<Set<string>>(new Set());
 
   // Auto-select first project
   const projectId = selectedProjectId || projects?.[0]?.id || '';
@@ -214,7 +237,13 @@ export default function CampaignPage() {
   const { data: stats } = useJobStats();
   const createJob = useCreateJob();
 
-  const dispatch = useAutoDispatch(projectId, drainEnabled);
+  // Server-side drain
+  const { data: drainStatus } = useDrainStatus(projectId);
+  const { data: preview } = useDrainPreview(projectId);
+  const startDrain = useStartDrain();
+  const stopDrain = useStopDrain();
+
+  const isDraining = drainStatus?.active ?? false;
 
   const tree = useMemo(() => buildBeadTree(beads || []), [beads]);
   const readyIds = useMemo(() => new Set(readyBeads.map((b) => b.id)), [readyBeads]);
@@ -231,6 +260,55 @@ export default function CampaignPage() {
     }
     return m;
   }, [jobs]);
+
+  function toggleSelect(id: string) {
+    setSelectedBeadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function autoPickBeads() {
+    if (preview?.candidates) {
+      setSelectedBeadIds(new Set(preview.candidates.map((c) => c.id)));
+    }
+  }
+
+  function selectAllReady() {
+    setSelectedBeadIds(new Set(readyBeads.map((b) => b.id)));
+  }
+
+  function clearSelection() {
+    setSelectedBeadIds(new Set());
+  }
+
+  async function handleDrain() {
+    if (isDraining) {
+      stopDrain.mutate(projectId);
+      return;
+    }
+
+    if (selectedBeadIds.size > 0) {
+      // Drain selected beads
+      startDrain.mutate({
+        projectId,
+        beadIds: Array.from(selectedBeadIds),
+      });
+    } else {
+      // Auto-select mode
+      startDrain.mutate({
+        projectId,
+        autoSelect: true,
+        maxAutoSelect: 10,
+      });
+    }
+    setSelectedBeadIds(new Set());
+  }
 
   async function handleDispatch(bead: Bead) {
     setDispatchingId(bead.id);
@@ -264,7 +342,10 @@ export default function CampaignPage() {
         <div className="relative">
           <select
             value={projectId}
-            onChange={(e) => setSelectedProjectId(e.target.value)}
+            onChange={(e) => {
+              setSelectedProjectId(e.target.value);
+              setSelectedBeadIds(new Set());
+            }}
             className="appearance-none bg-surface-raised border border-surface-border rounded px-3 py-1.5 pr-8 text-sm text-text focus:outline-none focus:border-accent/50"
           >
             {projects?.map((p) => (
@@ -278,29 +359,65 @@ export default function CampaignPage() {
 
         {/* Stats */}
         <div className="flex items-center gap-3 text-xs font-mono text-text-muted ml-auto">
-          <span className="text-green-400">{dispatch.readyCount} ready</span>
+          <span className="text-green-400">{readyBeads.length} ready</span>
           <span className="text-yellow-400">{stats?.running ?? 0} running</span>
           <span className="text-blue-400">{stats?.queued ?? 0} queued</span>
           <span>{stats?.completed ?? 0} done</span>
           <span className="text-red-400">{stats?.failed ?? 0} failed</span>
         </div>
 
-        {/* Drain toggle */}
-        <button
-          onClick={() => setDrainEnabled(!drainEnabled)}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-            drainEnabled
-              ? 'bg-accent text-white'
-              : 'bg-surface-raised border border-surface-border text-text-muted hover:text-text'
-          }`}
-        >
-          {drainEnabled ? (
-            <Zap className="w-4 h-4" />
-          ) : (
-            <ZapOff className="w-4 h-4" />
+        {/* Drain controls */}
+        <div className="flex items-center gap-2">
+          {!isDraining && (
+            <>
+              <button
+                onClick={autoPickBeads}
+                className="px-2 py-1.5 text-xs rounded bg-surface-raised border border-surface-border text-text-muted hover:text-text transition-colors flex items-center gap-1"
+                title={`Auto-pick ${preview?.count ?? '...'} ready leaf tasks`}
+              >
+                <Sparkles className="w-3 h-3" />
+                Auto-pick{preview?.count ? ` (${preview.count})` : ''}
+              </button>
+              {readyBeads.length > 0 && (
+                <button
+                  onClick={selectedBeadIds.size > 0 ? clearSelection : selectAllReady}
+                  className="px-2 py-1.5 text-xs rounded bg-surface-raised border border-surface-border text-text-muted hover:text-text transition-colors"
+                >
+                  {selectedBeadIds.size > 0 ? 'Clear' : 'All'}
+                </button>
+              )}
+            </>
           )}
-          {drainEnabled ? 'Draining...' : 'Drain Queue'}
-        </button>
+
+          <button
+            onClick={handleDrain}
+            disabled={startDrain.isPending || stopDrain.isPending}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+              isDraining
+                ? 'bg-accent text-white'
+                : selectedBeadIds.size > 0
+                  ? 'bg-accent/80 text-white hover:bg-accent'
+                  : 'bg-surface-raised border border-surface-border text-text-muted hover:text-text'
+            }`}
+          >
+            {isDraining ? (
+              <>
+                <Square className="w-4 h-4" />
+                Stop ({drainStatus?.jobsCreated ?? 0} jobs)
+              </>
+            ) : selectedBeadIds.size > 0 ? (
+              <>
+                <Zap className="w-4 h-4" />
+                Drain {selectedBeadIds.size} selected
+              </>
+            ) : (
+              <>
+                <Zap className="w-4 h-4" />
+                Drain
+              </>
+            )}
+          </button>
+        </div>
 
         {/* User */}
         {user && (
@@ -323,8 +440,24 @@ export default function CampaignPage() {
         )}
       </header>
 
+      {/* Drain status banner */}
+      {isDraining && (
+        <div className="bg-accent/10 border-b border-accent/20 px-4 py-2 flex items-center gap-3 text-sm">
+          <Zap className="w-4 h-4 text-accent animate-pulse" />
+          <span className="text-accent font-medium">Server drain active</span>
+          <span className="text-text-muted">
+            {drainStatus?.jobsCreated ?? 0} jobs created
+            {drainStatus?.readyCount ? ` · ${drainStatus.readyCount} ready` : ''}
+            {drainStatus?.scopeSize ? ` · ${drainStatus.scopeSize} in scope` : ''}
+          </span>
+          <span className="text-text-muted text-xs ml-auto">
+            Close this tab — the server keeps going
+          </span>
+        </div>
+      )}
+
       {/* Main content */}
-      <div className="flex h-[calc(100vh-57px)]">
+      <div className={`flex ${isDraining ? 'h-[calc(100vh-57px-37px)]' : 'h-[calc(100vh-57px)]'}`}>
         {/* Bead tree - left panel */}
         <div className="flex-1 overflow-y-auto border-r border-surface-border">
           <div className="px-3 py-2 border-b border-surface-border flex items-center justify-between">
@@ -333,6 +466,7 @@ export default function CampaignPage() {
             </span>
             <span className="text-xs font-mono text-text-muted">
               {beads?.length ?? 0} total, {readyBeads.length} ready
+              {selectedBeadIds.size > 0 && `, ${selectedBeadIds.size} selected`}
             </span>
           </div>
           {beadsLoading ? (
@@ -353,6 +487,8 @@ export default function CampaignPage() {
                   children={tree.children}
                   jobMap={jobMap}
                   readyIds={readyIds}
+                  selectedIds={selectedBeadIds}
+                  onToggleSelect={toggleSelect}
                   onDispatch={handleDispatch}
                   dispatchingId={dispatchingId}
                 />
