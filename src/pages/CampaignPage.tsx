@@ -24,12 +24,12 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useProjects } from '../hooks/useProjects';
 import { useBeads, useReadyBeads } from '../hooks/useBeads';
-import { useJobs, useCreateJob, useJobStats } from '../hooks/useJobs';
+import { useJobs, useCreateJob, useRetryJob, useJobStats } from '../hooks/useJobs';
 import { useDrainStatus, useDrainPreview, useDrainSummary, useStartDrain, useStopDrain } from '../hooks/useDrain';
 import { BeadDetailPanel } from '../components/BeadDetailPanel';
 import { JobDetailPanel } from '../components/JobDetailPanel';
 import { DrainDetailPanel } from '../components/DrainDetailPanel';
-import type { Bead, Job, BeadStatus, JobStatus, DrainSummary as DrainSummaryType } from '../lib/types';
+import type { Bead, Job, BeadStatus, JobStatus, DrainSummary as DrainSummaryType, DrainSummaryJob } from '../lib/types';
 
 // -- Right panel discriminated union --
 type RightPanel =
@@ -77,6 +77,65 @@ const JOB_DOT_COLOR: Record<JobStatus, string> = {
   failed: 'bg-red-400',
   cancelled: 'bg-text-muted',
 };
+
+// -- Failure category tiers --
+type FailureTier = 1 | 2 | 3;
+
+const CATEGORY_TIER: Record<string, { tier: FailureTier; label: string }> = {
+  compile_error:      { tier: 1, label: 'Retryable' },
+  test_failure:       { tier: 1, label: 'Retryable' },
+  agent_timeout:      { tier: 1, label: 'Retryable' },
+  dep_install:        { tier: 1, label: 'Retryable' },
+  server_restart:     { tier: 1, label: 'Retryable' },
+  push_large_file:    { tier: 1, label: 'Retryable' },
+  sandbox_rate_limit: { tier: 2, label: 'Check & Retry' },
+  sandbox_creation:   { tier: 2, label: 'Check & Retry' },
+  oom:                { tier: 2, label: 'Check & Retry' },
+  push_auth:          { tier: 3, label: 'Needs Attention' },
+  clone_failed:       { tier: 3, label: 'Needs Attention' },
+  sandbox_auth:       { tier: 3, label: 'Needs Attention' },
+  agent_token_limit:  { tier: 3, label: 'Needs Attention' },
+  unknown:            { tier: 3, label: 'Needs Attention' },
+};
+
+const TIER_STYLE: Record<FailureTier, { badge: string; text: string }> = {
+  1: { badge: 'bg-green-500/20 text-green-400', text: 'text-green-400' },
+  2: { badge: 'bg-yellow-500/20 text-yellow-400', text: 'text-yellow-400' },
+  3: { badge: 'bg-red-500/20 text-red-400', text: 'text-red-400' },
+};
+
+interface FailureGroup {
+  category: string;
+  tier: FailureTier;
+  tierLabel: string;
+  failureTitle: string;
+  jobs: DrainSummaryJob[];
+}
+
+function buildFailureGroups(failedJobs: DrainSummaryJob[]): FailureGroup[] {
+  const byCategory = new Map<string, DrainSummaryJob[]>();
+  for (const job of failedJobs) {
+    const cat = job.failureCategory || 'unknown';
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat)!.push(job);
+  }
+
+  const groups: FailureGroup[] = [];
+  for (const [category, jobs] of byCategory) {
+    const tierInfo = CATEGORY_TIER[category] || { tier: 3 as FailureTier, label: 'Needs Attention' };
+    groups.push({
+      category,
+      tier: tierInfo.tier,
+      tierLabel: tierInfo.label,
+      failureTitle: jobs[0].failureTitle || category.replace(/_/g, ' '),
+      jobs,
+    });
+  }
+
+  // Sort by tier (most actionable first), then by job count descending
+  groups.sort((a, b) => a.tier - b.tier || b.jobs.length - a.jobs.length);
+  return groups;
+}
 
 function buildBeadTree(beads: Bead[]) {
   const byId = new Map(beads.map((b) => [b.id, b]));
@@ -452,18 +511,112 @@ function SelectionReview({
   );
 }
 
+function FailureCategoryGroup({
+  group,
+  onRetryGroup,
+  onRetryJob,
+  onClickJob,
+  retryingJobIds,
+}: {
+  group: FailureGroup;
+  onRetryGroup?: (jobIds: string[]) => void;
+  onRetryJob?: (jobId: string) => void;
+  onClickJob?: (jobId: string) => void;
+  retryingJobIds: Set<string>;
+}) {
+  const canRetry = group.tier <= 2;
+  const style = TIER_STYLE[group.tier];
+  // Tier 3 collapsed by default
+  const [expanded, setExpanded] = useState(group.tier <= 2);
+  const groupRetrying = group.jobs.some((j) => retryingJobIds.has(j.jobId));
+
+  return (
+    <div className="border-l-2 border-surface-border/50 ml-2">
+      {/* Group header */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 py-1.5 px-3 text-xs hover:bg-surface-raised/80 transition-colors"
+      >
+        {expanded ? <ChevronUp className="w-3 h-3 text-text-muted" /> : <ChevronDown className="w-3 h-3 text-text-muted" />}
+        <span className="font-mono text-text">{group.category.replace(/_/g, ' ')}</span>
+        <span className="text-text-muted">— &quot;{group.failureTitle}&quot; — {group.jobs.length} job{group.jobs.length !== 1 ? 's' : ''}</span>
+        <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${style.badge}`}>
+          {group.tierLabel}
+        </span>
+        {canRetry && onRetryGroup && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRetryGroup(group.jobs.map((j) => j.jobId)); }}
+            disabled={groupRetrying}
+            className={`ml-auto px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition-colors ${
+              style.badge
+            } hover:opacity-80 disabled:opacity-50`}
+          >
+            <RefreshCw className={`w-2.5 h-2.5 ${groupRetrying ? 'animate-spin' : ''}`} />
+            Retry {group.jobs.length}
+          </button>
+        )}
+      </button>
+
+      {/* Job list */}
+      {expanded && (
+        <div className="pl-6 pb-1">
+          {group.jobs.map((job) => {
+            const isRetrying = retryingJobIds.has(job.jobId);
+            return (
+              <div
+                key={job.jobId}
+                className="flex items-center gap-2 py-1 px-2 rounded text-xs hover:bg-surface/50 group"
+              >
+                <span
+                  className="text-text truncate flex-1 cursor-pointer hover:text-accent transition-colors"
+                  onClick={() => onClickJob?.(job.jobId)}
+                >
+                  {job.subject}
+                </span>
+                {onRetryJob && (
+                  <button
+                    onClick={() => onRetryJob(job.jobId)}
+                    disabled={isRetrying}
+                    className="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all flex items-center gap-1 disabled:opacity-50"
+                    title="Retry this job"
+                  >
+                    <RefreshCw className={`w-2.5 h-2.5 ${isRetrying ? 'animate-spin' : ''}`} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DrainSummaryPanel({
   summary,
   onDismiss,
+  onRetryJob,
+  onRetryGroup,
+  onRetryAllFailed,
+  onClickJob,
+  retryingJobIds,
+  retryAllPending,
 }: {
   summary: DrainSummaryType;
   onDismiss: () => void;
+  onRetryJob?: (jobId: string) => void;
+  onRetryGroup?: (jobIds: string[]) => void;
+  onRetryAllFailed?: () => void;
+  onClickJob?: (jobId: string) => void;
+  retryingJobIds: Set<string>;
+  retryAllPending: boolean;
 }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const [showFailed, setShowFailed] = useState(false);
 
   const completed = summary.jobs.filter((j) => j.status === 'completed');
   const failed = summary.jobs.filter((j) => j.status === 'failed');
+  const failureGroups = useMemo(() => buildFailureGroups(failed), [failed]);
 
   return (
     <div className="bg-surface-raised border-b border-surface-border">
@@ -500,7 +653,12 @@ function DrainSummaryPanel({
             <div className="px-4 pb-3 space-y-1 max-h-48 overflow-y-auto">
               {completed.map((job) => (
                 <div key={job.jobId} className="flex items-center gap-2 py-1 px-2 rounded text-xs hover:bg-surface/50">
-                  <span className="text-text truncate flex-1">{job.subject}</span>
+                  <span
+                    className="text-text truncate flex-1 cursor-pointer hover:text-accent transition-colors"
+                    onClick={() => onClickJob?.(job.jobId)}
+                  >
+                    {job.subject}
+                  </span>
                   {job.testResults && (
                     <span className={`px-1.5 py-0.5 rounded font-mono ${
                       job.testResults.passed ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
@@ -525,7 +683,7 @@ function DrainSummaryPanel({
         </div>
       )}
 
-      {/* Failed jobs */}
+      {/* Failed jobs — grouped by category */}
       {failed.length > 0 && (
         <div className="border-t border-surface-border/50">
           <button
@@ -535,23 +693,28 @@ function DrainSummaryPanel({
             {showFailed ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
             <AlertTriangle className="w-3 h-3 text-red-400" />
             <span className="text-red-400">{failed.length} failed</span>
+            {onRetryAllFailed && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onRetryAllFailed(); }}
+                disabled={retryAllPending}
+                className="ml-auto px-2 py-0.5 rounded text-[10px] font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors flex items-center gap-1 disabled:opacity-50"
+              >
+                <RefreshCw className={`w-2.5 h-2.5 ${retryAllPending ? 'animate-spin' : ''}`} />
+                Re-drain {failed.length} failed
+              </button>
+            )}
           </button>
           {showFailed && (
-            <div className="px-4 pb-3 space-y-1 max-h-48 overflow-y-auto">
-              {failed.map((job) => (
-                <div key={job.jobId} className="py-1 px-2 rounded text-xs hover:bg-surface/50">
-                  <div className="flex items-center gap-2">
-                    <span className="text-text truncate flex-1">{job.subject}</span>
-                    {job.failureCategory && (
-                      <span className="px-1.5 py-0.5 rounded font-mono bg-red-500/20 text-red-400">
-                        {job.failureCategory}
-                      </span>
-                    )}
-                  </div>
-                  {job.failureTitle && (
-                    <div className="text-text-muted mt-0.5 pl-2">{job.failureTitle}</div>
-                  )}
-                </div>
+            <div className="px-2 pb-3 max-h-64 overflow-y-auto space-y-1">
+              {failureGroups.map((group) => (
+                <FailureCategoryGroup
+                  key={group.category}
+                  group={group}
+                  onRetryGroup={onRetryGroup}
+                  onRetryJob={onRetryJob}
+                  onClickJob={onClickJob}
+                  retryingJobIds={retryingJobIds}
+                />
               ))}
             </div>
           )}
@@ -596,6 +759,43 @@ export default function CampaignPage() {
   const { data: jobs } = useJobs(projectId);
   const { data: stats } = useJobStats();
   const createJob = useCreateJob();
+  const retryJob = useRetryJob();
+  const [retryingJobIds, setRetryingJobIds] = useState<Set<string>>(new Set());
+  const [retryAllPending, setRetryAllPending] = useState(false);
+
+  async function handleRetryJob(jobId: string) {
+    setRetryingJobIds((prev) => new Set(prev).add(jobId));
+    try {
+      await retryJob.mutateAsync(jobId);
+    } catch (err) {
+      console.error('Retry failed:', err);
+    } finally {
+      setRetryingJobIds((prev) => {
+        const next = new Set(prev);
+        next.delete(jobId);
+        return next;
+      });
+    }
+  }
+
+  async function handleRetryGroup(jobIds: string[]) {
+    for (const jobId of jobIds) {
+      await handleRetryJob(jobId);
+    }
+  }
+
+  async function handleRetryAllFailed() {
+    if (!drainSummary) return;
+    const failedJobIds = drainSummary.jobs
+      .filter((j) => j.status === 'failed')
+      .map((j) => j.jobId);
+    setRetryAllPending(true);
+    try {
+      await handleRetryGroup(failedJobIds);
+    } finally {
+      setRetryAllPending(false);
+    }
+  }
 
   // Server-side drain
   const { data: drainStatus } = useDrainStatus(projectId);
@@ -835,6 +1035,12 @@ export default function CampaignPage() {
         <DrainSummaryPanel
           summary={drainSummary}
           onDismiss={() => setSummaryDismissed(true)}
+          onRetryJob={handleRetryJob}
+          onRetryGroup={handleRetryGroup}
+          onRetryAllFailed={handleRetryAllFailed}
+          onClickJob={(jobId) => setRightPanel({ kind: 'jobDetail', jobId })}
+          retryingJobIds={retryingJobIds}
+          retryAllPending={retryAllPending}
         />
       )}
 
@@ -908,6 +1114,8 @@ export default function CampaignPage() {
               bead={inspectedJob.bead_id ? beadMap.get(inspectedJob.bead_id) : null}
               onBack={() => setRightPanel({ kind: 'feed' })}
               onClickBead={(beadId) => setRightPanel({ kind: 'beadDetail', beadId })}
+              onRetry={handleRetryJob}
+              isRetrying={retryingJobIds.has(inspectedJob.id)}
             />
           ) : rightPanel.kind === 'drainDetail' ? (
             <DrainDetailPanel

@@ -45,11 +45,15 @@ export function JobDetailPanel({
   bead,
   onBack,
   onClickBead,
+  onRetry,
+  isRetrying,
 }: {
   job: Job;
   bead?: Bead | null;
   onBack: () => void;
   onClickBead?: (beadId: string) => void;
+  onRetry?: (jobId: string) => void;
+  isRetrying?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [logExpanded, setLogExpanded] = useState(false);
@@ -109,6 +113,17 @@ export function JobDetailPanel({
               <Copy className="w-3 h-3" />
             )}
           </button>
+          {job.status === 'failed' && onRetry && (
+            <button
+              onClick={() => onRetry(job.id)}
+              disabled={isRetrying}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+              title="Retry this job"
+            >
+              <RefreshCw className={`w-3 h-3 ${isRetrying ? 'animate-spin' : ''}`} />
+              <span className="text-xs font-medium">Retry</span>
+            </button>
+          )}
         </div>
 
         {/* Bead link */}
