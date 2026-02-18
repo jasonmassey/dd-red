@@ -9,10 +9,12 @@ import {
   Lock,
   XCircle,
   ChevronDown,
+  ChevronUp,
   LogOut,
   RefreshCw,
   Sparkles,
   Check,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useProjects } from '../hooks/useProjects';
@@ -221,12 +223,86 @@ function JobFeed({ jobs }: { jobs: Job[] }) {
   );
 }
 
+function SelectionReview({
+  selectedIds,
+  beads,
+  onRemove,
+  onClear,
+  collapsed,
+  onToggleCollapse,
+}: {
+  selectedIds: Set<string>;
+  beads: Bead[];
+  onRemove: (id: string) => void;
+  onClear: () => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+}) {
+  const selected = beads.filter((b) => selectedIds.has(b.id));
+  if (selected.length === 0) return null;
+
+  // Sort by priority then subject
+  selected.sort((a, b) => a.priority - b.priority || a.subject.localeCompare(b.subject));
+
+  return (
+    <div className="border-b border-accent/20 bg-surface-raised/50">
+      <button
+        onClick={onToggleCollapse}
+        className="w-full px-4 py-2 flex items-center gap-2 text-sm hover:bg-surface-raised/80 transition-colors"
+      >
+        {collapsed ? (
+          <ChevronDown className="w-4 h-4 text-accent" />
+        ) : (
+          <ChevronUp className="w-4 h-4 text-accent" />
+        )}
+        <span className="text-accent font-medium">{selected.length} tasks selected for drain</span>
+        <span className="text-text-muted text-xs ml-2">
+          {selected.filter((b) => b.priority <= 1).length} high priority
+        </span>
+        <span className="ml-auto text-text-muted text-xs hover:text-text" onClick={(e) => { e.stopPropagation(); onClear(); }}>
+          Clear all
+        </span>
+      </button>
+      {!collapsed && (
+        <div className="px-4 pb-3 space-y-1 max-h-48 overflow-y-auto">
+          {selected.map((bead) => (
+            <div
+              key={bead.id}
+              className="flex items-center gap-2 py-1 px-2 rounded hover:bg-surface-raised group"
+            >
+              <span
+                className={`text-xs px-1.5 py-0.5 rounded font-mono ${
+                  PRIORITY_COLOR[bead.priority] || PRIORITY_COLOR[4]
+                }`}
+              >
+                {PRIORITY_LABEL[bead.priority] ?? `P${bead.priority}`}
+              </span>
+              <span className="text-sm text-text truncate flex-1">{bead.subject}</span>
+              {bead.beadType && (
+                <span className="text-xs text-text-muted">{bead.beadType}</span>
+              )}
+              <button
+                onClick={() => onRemove(bead.id)}
+                className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-400 transition-all"
+                title="Remove from selection"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CampaignPage() {
   const { user, logout } = useAuth();
   const { data: projects } = useProjects();
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [dispatchingId, setDispatchingId] = useState<string | null>(null);
   const [selectedBeadIds, setSelectedBeadIds] = useState<Set<string>>(new Set());
+  const [reviewCollapsed, setReviewCollapsed] = useState(false);
 
   // Auto-select first project
   const projectId = selectedProjectId || projects?.[0]?.id || '';
@@ -276,6 +352,7 @@ export default function CampaignPage() {
   function autoPickBeads() {
     if (preview?.candidates) {
       setSelectedBeadIds(new Set(preview.candidates.map((c) => c.id)));
+      setReviewCollapsed(false);
     }
   }
 
@@ -331,7 +408,7 @@ export default function CampaignPage() {
   const selectedProject = projects?.find((p) => p.id === projectId);
 
   return (
-    <div className="min-h-screen bg-surface text-text">
+    <div className="h-screen flex flex-col bg-surface text-text">
       {/* Header */}
       <header className="border-b border-surface-border px-4 py-3 flex items-center gap-4">
         <h1 className="text-lg font-bold tracking-tight">
@@ -456,8 +533,20 @@ export default function CampaignPage() {
         </div>
       )}
 
+      {/* Selection review panel */}
+      {!isDraining && selectedBeadIds.size > 0 && (
+        <SelectionReview
+          selectedIds={selectedBeadIds}
+          beads={beads || []}
+          onRemove={(id) => toggleSelect(id)}
+          onClear={clearSelection}
+          collapsed={reviewCollapsed}
+          onToggleCollapse={() => setReviewCollapsed(!reviewCollapsed)}
+        />
+      )}
+
       {/* Main content */}
-      <div className={`flex ${isDraining ? 'h-[calc(100vh-57px-37px)]' : 'h-[calc(100vh-57px)]'}`}>
+      <div className="flex flex-1 overflow-hidden">
         {/* Bead tree - left panel */}
         <div className="flex-1 overflow-y-auto border-r border-surface-border">
           <div className="px-3 py-2 border-b border-surface-border flex items-center justify-between">
