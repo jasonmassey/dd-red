@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   Play,
   Zap,
@@ -9,6 +9,7 @@ import {
   Lock,
   XCircle,
   GitBranch,
+  GitMerge,
   ChevronDown,
   ChevronUp,
   LogOut,
@@ -21,16 +22,18 @@ import {
   AlertTriangle,
   Ban,
   Copy,
+  SkipForward,
+  Pencil,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useProjects } from '../hooks/useProjects';
-import { useBeads, useReadyBeads } from '../hooks/useBeads';
+import { useBeads, useReadyBeads, useUpdateBead } from '../hooks/useBeads';
 import { useJobs, useCreateJob, useRetryJob, useJobStats } from '../hooks/useJobs';
-import { useDrainStatus, useDrainPreview, useDrainSummary, useStartDrain, useStopDrain } from '../hooks/useDrain';
+import { useDrainStatus, useDrainPreview, useDrainSummary, useStartDrain, useStopDrain, useDrainPRStatuses, useMergePR, useUpdateChecklist } from '../hooks/useDrain';
 import { BeadDetailPanel } from '../components/BeadDetailPanel';
 import { JobDetailPanel } from '../components/JobDetailPanel';
 import { DrainDetailPanel } from '../components/DrainDetailPanel';
-import type { Bead, Job, BeadStatus, JobStatus, DrainSummary as DrainSummaryType, DrainSummaryJob } from '../lib/types';
+import type { Bead, Job, BeadStatus, JobStatus, DrainSummary as DrainSummaryType, DrainSummaryJob, PRStatus } from '../lib/types';
 
 // -- Right panel discriminated union --
 type RightPanel =
@@ -517,12 +520,16 @@ function FailureCategoryGroup({
   onRetryGroup,
   onRetryJob,
   onClickJob,
+  onEditAndRetry,
+  onSkipJob,
   retryingJobIds,
 }: {
   group: FailureGroup;
   onRetryGroup?: (jobIds: string[]) => void;
   onRetryJob?: (jobId: string) => void;
   onClickJob?: (jobId: string) => void;
+  onEditAndRetry?: (beadId: string) => void;
+  onSkipJob?: (job: DrainSummaryJob) => void;
   retryingJobIds: Set<string>;
 }) {
   const canRetry = group.tier <= 2;
@@ -574,16 +581,36 @@ function FailureCategoryGroup({
                 >
                   {job.subject}
                 </span>
-                {onRetryJob && (
-                  <button
-                    onClick={() => onRetryJob(job.jobId)}
-                    disabled={isRetrying}
-                    className="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all flex items-center gap-1 disabled:opacity-50"
-                    title="Retry this job"
-                  >
-                    <RefreshCw className={`w-2.5 h-2.5 ${isRetrying ? 'animate-spin' : ''}`} />
-                  </button>
-                )}
+                <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-all flex-shrink-0">
+                  {onRetryJob && (
+                    <button
+                      onClick={() => onRetryJob(job.jobId)}
+                      disabled={isRetrying}
+                      className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center gap-1 disabled:opacity-50"
+                      title="Retry this job"
+                    >
+                      <RefreshCw className={`w-2.5 h-2.5 ${isRetrying ? 'animate-spin' : ''}`} />
+                    </button>
+                  )}
+                  {onEditAndRetry && job.beadId && (
+                    <button
+                      onClick={() => onEditAndRetry(job.beadId!)}
+                      className="px-1.5 py-0.5 rounded bg-accent/10 text-accent hover:bg-accent/20 flex items-center gap-1"
+                      title="Edit pre-instructions and retry"
+                    >
+                      <Pencil className="w-2.5 h-2.5" />
+                    </button>
+                  )}
+                  {onSkipJob && (
+                    <button
+                      onClick={() => onSkipJob(job)}
+                      className="px-1.5 py-0.5 rounded bg-text-muted/10 text-text-muted hover:bg-text-muted/20 flex items-center gap-1"
+                      title="Skip (deprioritize to P4)"
+                    >
+                      <SkipForward className="w-2.5 h-2.5" />
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -593,32 +620,116 @@ function FailureCategoryGroup({
   );
 }
 
+// -- PR Status helpers --
+
+type PRDisplayStatus = 'merged' | 'ready' | 'ci_failing' | 'has_conflicts' | 'review_requested' | 'open';
+
+function getPRDisplayStatus(pr: PRStatus): PRDisplayStatus {
+  if (pr.state === 'merged') return 'merged';
+  if (pr.state === 'closed') return 'merged'; // treat closed as done
+  if (pr.mergeable === false) return 'has_conflicts';
+  if (pr.ciStatus === 'failure') return 'ci_failing';
+  if (pr.reviewStatus === 'changes_requested') return 'review_requested';
+  if (pr.mergeable && pr.ciStatus === 'success') return 'ready';
+  if (pr.reviewStatus === 'pending') return 'review_requested';
+  return 'open';
+}
+
+const PR_BADGE: Record<PRDisplayStatus, { label: string; className: string }> = {
+  merged: { label: 'Merged', className: 'bg-text-muted/20 text-text-muted' },
+  ready: { label: 'Ready to merge', className: 'bg-green-500/20 text-green-400' },
+  ci_failing: { label: 'CI failing', className: 'bg-yellow-500/20 text-yellow-400' },
+  has_conflicts: { label: 'Has conflicts', className: 'bg-red-500/20 text-red-400' },
+  review_requested: { label: 'Review requested', className: 'bg-blue-500/20 text-blue-400' },
+  open: { label: 'Open', className: 'bg-surface text-text-muted' },
+};
+
+// -- Checklist parsing --
+
+function parseChecklistItems(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/^\s*[-*\d.)\]]+\s*/, '').trim())
+    .filter((line) => line.length > 0);
+}
+
 function DrainSummaryPanel({
   summary,
+  projectId,
   onDismiss,
   onRetryJob,
   onRetryGroup,
   onRetryAllFailed,
   onClickJob,
+  onEditAndRetry,
+  onSkipJob,
   retryingJobIds,
   retryAllPending,
 }: {
   summary: DrainSummaryType;
+  projectId: string;
   onDismiss: () => void;
   onRetryJob?: (jobId: string) => void;
   onRetryGroup?: (jobIds: string[]) => void;
   onRetryAllFailed?: () => void;
   onClickJob?: (jobId: string) => void;
+  onEditAndRetry?: (beadId: string) => void;
+  onSkipJob?: (job: DrainSummaryJob) => void;
   retryingJobIds: Set<string>;
   retryAllPending: boolean;
 }) {
-  const [showCompleted, setShowCompleted] = useState(false);
-  const [showFailed, setShowFailed] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(true);
+  const [showFailed, setShowFailed] = useState(true);
   const [drainIdCopied, setDrainIdCopied] = useState(false);
+  const [mergingPRs, setMergingPRs] = useState<Set<number>>(new Set());
+  const [skippedJobIds, setSkippedJobIds] = useState<Set<string>>(new Set());
 
   const completed = summary.jobs.filter((j) => j.status === 'completed');
-  const failed = summary.jobs.filter((j) => j.status === 'failed');
+  const failed = summary.jobs.filter((j) => j.status === 'failed' && !skippedJobIds.has(j.jobId));
   const failureGroups = useMemo(() => buildFailureGroups(failed), [failed]);
+
+  // PR statuses
+  const { data: prStatuses, isLoading: prLoading } = useDrainPRStatuses(projectId, summary.drainId);
+  const mergePR = useMergePR();
+
+  // Checklist
+  const updateChecklist = useUpdateChecklist();
+  const checklistItems = useMemo(
+    () => summary.smokeTestChecklist ? parseChecklistItems(summary.smokeTestChecklist) : [],
+    [summary.smokeTestChecklist]
+  );
+  const [localChecked, setLocalChecked] = useState<boolean[]>(
+    () => summary.checklistState || new Array(checklistItems.length).fill(false)
+  );
+  // Sync when checklistItems changes length
+  useMemo(() => {
+    if (checklistItems.length > 0 && localChecked.length !== checklistItems.length) {
+      const next = new Array(checklistItems.length).fill(false);
+      // Preserve existing checks
+      for (let i = 0; i < Math.min(localChecked.length, next.length); i++) {
+        next[i] = localChecked[i];
+      }
+      setLocalChecked(next);
+    }
+  }, [checklistItems.length]);
+
+  const checkedCount = localChecked.filter(Boolean).length;
+
+  // PR status map: jobId -> PRStatus
+  const prStatusMap = useMemo(() => {
+    const map = new Map<string, PRStatus>();
+    if (prStatuses) {
+      for (const pr of prStatuses) {
+        map.set(pr.jobId, pr);
+      }
+    }
+    return map;
+  }, [prStatuses]);
+
+  const readyPRs = useMemo(
+    () => (prStatuses || []).filter((pr) => getPRDisplayStatus(pr) === 'ready'),
+    [prStatuses]
+  );
 
   const handleCopyDrainId = () => {
     if (!summary.drainId) return;
@@ -627,13 +738,48 @@ function DrainSummaryPanel({
     setTimeout(() => setDrainIdCopied(false), 1500);
   };
 
+  async function handleMergePR(prNumber: number) {
+    setMergingPRs((prev) => new Set(prev).add(prNumber));
+    try {
+      await mergePR.mutateAsync({ projectId, prNumber });
+    } catch (err) {
+      console.error('Merge failed:', err);
+    } finally {
+      setMergingPRs((prev) => {
+        const next = new Set(prev);
+        next.delete(prNumber);
+        return next;
+      });
+    }
+  }
+
+  async function handleBatchMerge() {
+    for (const pr of readyPRs) {
+      await handleMergePR(pr.prNumber);
+    }
+  }
+
+  function handleToggleCheck(index: number) {
+    const next = [...localChecked];
+    next[index] = !next[index];
+    setLocalChecked(next);
+    if (summary.drainId) {
+      updateChecklist.mutate({ projectId, drainId: summary.drainId, checked: next });
+    }
+  }
+
+  function handleSkip(job: DrainSummaryJob) {
+    setSkippedJobIds((prev) => new Set(prev).add(job.jobId));
+    onSkipJob?.(job);
+  }
+
   return (
-    <div className="bg-surface-raised border-b border-surface-border">
+    <div className="bg-surface-raised border-b border-surface-border max-h-[60vh] overflow-y-auto">
       {/* Header */}
-      <div className="px-4 py-3 flex items-center gap-3">
+      <div className="px-4 py-3 flex items-center gap-3 sticky top-0 bg-surface-raised z-10 border-b border-surface-border/30">
         <ClipboardCheck className="w-5 h-5 text-green-400" />
         <span className="text-sm font-medium text-text">
-          Drain Complete — {summary.completedJobs} completed, {summary.failedJobs} failed
+          Drain Review — {summary.completedJobs} completed, {summary.failedJobs} failed
         </span>
         {summary.drainId && (
           <button
@@ -661,7 +807,7 @@ function DrainSummaryPanel({
         </button>
       </div>
 
-      {/* Completed jobs */}
+      {/* Completed jobs with PR status */}
       {completed.length > 0 && (
         <div className="border-t border-surface-border/50">
           <button
@@ -671,42 +817,83 @@ function DrainSummaryPanel({
             {showCompleted ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
             <CheckCircle2 className="w-3 h-3 text-green-400" />
             <span className="text-green-400">{completed.length} completed</span>
+            {readyPRs.length > 0 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleBatchMerge(); }}
+                disabled={mergingPRs.size > 0}
+                className="ml-auto px-2 py-0.5 rounded text-[10px] font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors flex items-center gap-1 disabled:opacity-50"
+              >
+                <GitMerge className={`w-2.5 h-2.5 ${mergingPRs.size > 0 ? 'animate-spin' : ''}`} />
+                Merge {readyPRs.length} ready
+              </button>
+            )}
           </button>
           {showCompleted && (
-            <div className="px-4 pb-3 space-y-1 max-h-48 overflow-y-auto">
-              {completed.map((job) => (
-                <div key={job.jobId} className="flex items-center gap-2 py-1 px-2 rounded text-xs hover:bg-surface/50">
-                  <span
-                    className="text-text truncate flex-1 cursor-pointer hover:text-accent transition-colors"
-                    onClick={() => onClickJob?.(job.jobId)}
-                  >
-                    {job.subject}
-                  </span>
-                  {job.testResults && (
-                    <span className={`px-1.5 py-0.5 rounded font-mono ${
-                      job.testResults.passed ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                    }`}>
-                      {job.testResults.passed ? 'tests pass' : 'tests fail'}
-                    </span>
-                  )}
-                  {job.prUrl && (
-                    <a
-                      href={job.prUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-accent hover:text-accent/80 flex items-center gap-1"
-                    >
-                      PR <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
+            <div className="px-4 pb-3 space-y-1 max-h-64 overflow-y-auto">
+              {prLoading && (
+                <div className="flex items-center gap-2 py-2 text-xs text-text-muted">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Loading PR statuses...
                 </div>
-              ))}
+              )}
+              {completed.map((job) => {
+                const pr = prStatusMap.get(job.jobId);
+                const displayStatus = pr ? getPRDisplayStatus(pr) : null;
+                const badge = displayStatus ? PR_BADGE[displayStatus] : null;
+                const isMerging = pr ? mergingPRs.has(pr.prNumber) : false;
+
+                return (
+                  <div key={job.jobId} className="flex items-center gap-2 py-1 px-2 rounded text-xs hover:bg-surface/50 group">
+                    <span
+                      className="text-text truncate flex-1 cursor-pointer hover:text-accent transition-colors"
+                      onClick={() => onClickJob?.(job.jobId)}
+                    >
+                      {job.subject}
+                    </span>
+                    {job.prUrl && pr && badge && (
+                      <>
+                        <a
+                          href={job.prUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-accent hover:text-accent/80 flex items-center gap-1 flex-shrink-0"
+                        >
+                          PR #{pr.prNumber} <ExternalLink className="w-3 h-3" />
+                        </a>
+                        <span className={`px-1.5 py-0.5 rounded font-mono text-[10px] flex-shrink-0 ${badge.className}`}>
+                          {badge.label}
+                        </span>
+                        {displayStatus === 'ready' && (
+                          <button
+                            onClick={() => handleMergePR(pr.prNumber)}
+                            disabled={isMerging}
+                            className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors flex items-center gap-1 disabled:opacity-50 flex-shrink-0"
+                          >
+                            <GitMerge className={`w-2.5 h-2.5 ${isMerging ? 'animate-spin' : ''}`} />
+                            Merge
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {job.prUrl && !pr && !prLoading && (
+                      <a
+                        href={job.prUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-accent hover:text-accent/80 flex items-center gap-1 flex-shrink-0"
+                      >
+                        PR <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       )}
 
-      {/* Failed jobs — grouped by category */}
+      {/* Failed jobs — grouped by category with Edit & Retry + Skip */}
       {failed.length > 0 && (
         <div className="border-t border-surface-border/50">
           <button
@@ -736,6 +923,8 @@ function DrainSummaryPanel({
                   onRetryGroup={onRetryGroup}
                   onRetryJob={onRetryJob}
                   onClickJob={onClickJob}
+                  onEditAndRetry={onEditAndRetry}
+                  onSkipJob={handleSkip}
                   retryingJobIds={retryingJobIds}
                 />
               ))}
@@ -744,14 +933,38 @@ function DrainSummaryPanel({
         </div>
       )}
 
-      {/* Smoke test checklist */}
+      {/* Interactive smoke test checklist */}
       {summary.smokeTestChecklist ? (
         <div className="border-t border-surface-border/50 px-4 py-3">
-          <div className="text-xs font-mono text-text-muted uppercase tracking-wider mb-2">
-            AI Smoke Test Checklist
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-mono text-text-muted uppercase tracking-wider">
+              Smoke Test Checklist
+            </span>
+            <span className="text-xs text-text-muted">
+              {checkedCount}/{checklistItems.length} checked
+            </span>
           </div>
-          <div className="text-sm text-text whitespace-pre-wrap leading-relaxed">
-            {summary.smokeTestChecklist}
+          <div className="space-y-1">
+            {checklistItems.map((item, i) => (
+              <label
+                key={i}
+                className="flex items-start gap-2 py-1 px-2 rounded hover:bg-surface/50 cursor-pointer group"
+              >
+                <button
+                  onClick={() => handleToggleCheck(i)}
+                  className={`w-4 h-4 flex-shrink-0 mt-0.5 rounded border transition-colors ${
+                    localChecked[i]
+                      ? 'bg-green-500 border-green-500 text-white'
+                      : 'border-surface-border hover:border-green-500/50'
+                  } flex items-center justify-center`}
+                >
+                  {localChecked[i] && <Check className="w-3 h-3" />}
+                </button>
+                <span className={`text-sm leading-relaxed ${localChecked[i] ? 'text-text-muted line-through' : 'text-text'}`}>
+                  {item}
+                </span>
+              </label>
+            ))}
           </div>
         </div>
       ) : (
@@ -783,6 +996,7 @@ export default function CampaignPage() {
   const { data: stats } = useJobStats();
   const createJob = useCreateJob();
   const retryJob = useRetryJob();
+  const updateBead = useUpdateBead();
   const [retryingJobIds, setRetryingJobIds] = useState<Set<string>>(new Set());
   const [retryAllPending, setRetryAllPending] = useState(false);
 
@@ -817,6 +1031,24 @@ export default function CampaignPage() {
       await handleRetryGroup(failedJobIds);
     } finally {
       setRetryAllPending(false);
+    }
+  }
+
+  function handleEditAndRetry(beadId: string) {
+    // Open the bead in the right panel for editing pre-instructions
+    setRightPanel({ kind: 'beadDetail', beadId });
+  }
+
+  async function handleSkipJob(job: DrainSummaryJob) {
+    if (!job.beadId) return;
+    try {
+      await updateBead.mutateAsync({
+        beadId: job.beadId,
+        projectId,
+        priority: 4,
+      });
+    } catch (err) {
+      console.error('Skip failed:', err);
     }
   }
 
@@ -1057,11 +1289,14 @@ export default function CampaignPage() {
       {!isDraining && !summaryDismissed && drainSummary && (
         <DrainSummaryPanel
           summary={drainSummary}
+          projectId={projectId}
           onDismiss={() => setSummaryDismissed(true)}
           onRetryJob={handleRetryJob}
           onRetryGroup={handleRetryGroup}
           onRetryAllFailed={handleRetryAllFailed}
           onClickJob={(jobId) => setRightPanel({ kind: 'jobDetail', jobId })}
+          onEditAndRetry={handleEditAndRetry}
+          onSkipJob={handleSkipJob}
           retryingJobIds={retryingJobIds}
           retryAllPending={retryAllPending}
         />

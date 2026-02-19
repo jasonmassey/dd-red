@@ -1,4 +1,4 @@
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { Bead, PaginatedResponse } from '../lib/types';
 
@@ -37,4 +37,26 @@ export function useReadyBeads(projectId: string) {
   });
 
   return readyBeads || [];
+}
+
+export function useUpdateBead() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: {
+      beadId: string;
+      projectId: string;
+      priority?: number;
+      status?: string;
+      preInstructions?: string;
+    }) => {
+      const { beadId, ...body } = input;
+      const response = await api.patch<Bead>(`/beads/${beadId}`, body);
+      if (!response.success) throw new Error(response.error);
+      return response.data!;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['beads', variables.projectId] });
+    },
+  });
 }

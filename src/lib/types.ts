@@ -153,6 +153,19 @@ export interface DrainSummary {
   failedJobs: number;
   jobs: DrainSummaryJob[];
   smokeTestChecklist: string | null;
+  checklistState?: boolean[];
+}
+
+export interface PRStatus {
+  jobId: string;
+  prUrl: string;
+  prNumber: number;
+  state: 'open' | 'closed' | 'merged';
+  mergeable: boolean | null;
+  ciStatus: 'success' | 'failure' | 'pending' | 'none';
+  reviewStatus: 'approved' | 'changes_requested' | 'pending' | 'none';
+  title: string;
+  mergedAt: string | null;
 }
 
 export interface Drain {

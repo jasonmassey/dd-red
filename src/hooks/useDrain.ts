@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import type { DrainStatus, DrainPreview, DrainStartResult, DrainSummary, DrainDetail } from '../lib/types';
+import type { DrainStatus, DrainPreview, DrainStartResult, DrainSummary, DrainDetail, PRStatus } from '../lib/types';
 
 export function useDrainStatus(projectId: string) {
   return useQuery({
@@ -106,6 +106,62 @@ export function useStopDrain() {
     },
     onSuccess: (_data, projectId) => {
       queryClient.invalidateQueries({ queryKey: ['drain', projectId] });
+    },
+  });
+}
+
+export function useDrainPRStatuses(projectId: string, drainId: string | undefined) {
+  return useQuery({
+    queryKey: ['drainPRStatuses', projectId, drainId],
+    queryFn: async () => {
+      const response = await api.get<{ data: PRStatus[] }>(
+        `/projects/${projectId}/drains/${drainId}/pr-status`
+      );
+      if (!response.success) throw new Error(response.error);
+      return response.data!.data;
+    },
+    enabled: !!projectId && !!drainId,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      // Poll every 30s while any PR is still open
+      const hasOpen = data.some((pr) => pr.state === 'open');
+      return hasOpen ? 30_000 : false;
+    },
+  });
+}
+
+export function useMergePR() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { projectId: string; prNumber: number }) => {
+      const response = await api.post<{ merged: boolean; sha?: string }>(
+        `/projects/${input.projectId}/pulls/${input.prNumber}/merge`
+      );
+      if (!response.success) throw new Error(response.error);
+      return response.data!;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['drainPRStatuses', variables.projectId] });
+    },
+  });
+}
+
+export function useUpdateChecklist() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { projectId: string; drainId: string; checked: boolean[] }) => {
+      const response = await api.patch<{ success: boolean; checklistState: boolean[] }>(
+        `/projects/${input.projectId}/drains/${input.drainId}/checklist`,
+        { checked: input.checked }
+      );
+      if (!response.success) throw new Error(response.error);
+      return response.data!;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['drainSummary', variables.projectId] });
     },
   });
 }
