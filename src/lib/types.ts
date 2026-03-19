@@ -35,8 +35,20 @@ export interface Bead {
   preInstructions?: string | null;
   functionalArea?: string | null;
   priority: number;
+  complexityScore?: number | null;
+  automabilityScore?: number | null;
+  automabilityGrade?: string | null;
+  burnScores?: BurnScoreFactors | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BurnScoreFactors {
+  instructionQuality: number;
+  scopeBoundedness: number;
+  testability: number;
+  riskLevel: number;
+  dependencyClarity: number;
 }
 
 export interface JobResult {
@@ -117,7 +129,7 @@ export interface DrainStatus {
 }
 
 export interface DrainPreview {
-  candidates: { id: string; subject: string; priority: number }[];
+  candidates: { id: string; subject: string; priority: number; automabilityScore?: number; automabilityGrade?: string }[];
   count: number;
 }
 

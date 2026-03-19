@@ -42,6 +42,16 @@ const PRIORITY_COLOR: Record<number, string> = {
   4: 'bg-text-muted/20 text-text-muted',
 };
 
+const GRADE_COLOR: Record<string, string> = {
+  A: 'bg-green-500/20 text-green-400',
+  B: 'bg-blue-500/20 text-blue-400',
+  C: 'bg-yellow-500/20 text-yellow-400',
+  D: 'bg-orange-500/20 text-orange-400',
+  F: 'bg-red-500/20 text-red-400',
+};
+
+type SortMode = 'priority' | 'automability' | 'name';
+
 type FailureTier = 1 | 2 | 3;
 
 const CATEGORY_TIER: Record<string, { tier: FailureTier; label: string }> = {
@@ -161,6 +171,7 @@ function SelectPhase({
   isStarting: boolean;
 }) {
   const [filter, setFilter] = useState('');
+  const [sortMode, setSortMode] = useState<SortMode>('priority');
 
   // Show ready beads, plus pending beads with pre-instructions (may be blocked)
   const candidates = useMemo(() => {
@@ -171,10 +182,20 @@ function SelectPhase({
         b.preInstructions &&
         !readySet.has(b.id)
     );
-    return [...readyBeads, ...extra].sort(
+    const all = [...readyBeads, ...extra];
+
+    if (sortMode === 'automability') {
+      return all.sort(
+        (a, b) => (b.automabilityScore ?? 0) - (a.automabilityScore ?? 0) || a.priority - b.priority
+      );
+    }
+    if (sortMode === 'name') {
+      return all.sort((a, b) => a.subject.localeCompare(b.subject));
+    }
+    return all.sort(
       (a, b) => a.priority - b.priority || a.subject.localeCompare(b.subject)
     );
-  }, [readyBeads, allBeads]);
+  }, [readyBeads, allBeads, sortMode]);
 
   const readySet = useMemo(() => new Set(readyBeads.map((b) => b.id)), [readyBeads]);
 
@@ -186,6 +207,32 @@ function SelectPhase({
     [candidates, filter]
   );
 
+  // Quick Wins: grade A/B + complexity <= 5
+  const quickWinIds = useMemo(() => {
+    return new Set(
+      readyBeads
+        .filter((b) => (b.automabilityGrade === 'A' || b.automabilityGrade === 'B') && (b.complexityScore ?? 99) <= 5)
+        .map((b) => b.id)
+    );
+  }, [readyBeads]);
+
+  const handleQuickWins = useCallback(() => {
+    // Select all quick wins — toggles them on (adds to existing selection)
+    const next = new Set(selectedIds);
+    for (const id of quickWinIds) next.add(id);
+    // Use onClear + re-toggle pattern: clear first, then add quick wins
+    onClear();
+    setTimeout(() => {
+      for (const id of quickWinIds) onToggle(id);
+    }, 0);
+  }, [quickWinIds, selectedIds, onClear, onToggle]);
+
+  // Suggestion panel
+  const scoredCount = candidates.filter((b) => b.automabilityGrade).length;
+  const avgScore = scoredCount > 0
+    ? Math.round(candidates.reduce((sum, b) => sum + (b.automabilityScore ?? 0), 0) / scoredCount)
+    : 0;
+
   return (
     <div className="min-h-screen bg-surface flex flex-col items-center justify-center px-4 py-12">
       <div className="w-full max-w-2xl">
@@ -193,14 +240,37 @@ function SelectPhase({
           SELECT YOUR TARGETS
         </h1>
 
+        {/* Intelligence summary */}
+        {scoredCount > 0 && (
+          <div className="mb-4 px-4 py-3 rounded-lg bg-surface-raised border border-surface-border text-xs text-text-muted">
+            <span className="text-text font-medium">{scoredCount}</span> scored
+            {' · '}
+            avg automability <span className="text-text font-medium">{avgScore}</span>
+            {quickWinIds.size > 0 && (
+              <>
+                {' · '}
+                <span className="text-green-400 font-medium">{quickWinIds.size} quick wins</span>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Quick actions */}
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
           <button
             onClick={onAutoSelect}
             className="px-3 py-1.5 rounded text-sm bg-surface-raised border border-surface-border text-text hover:bg-surface-border/30 transition-colors"
           >
             Auto-pick ({autoPickCount})
           </button>
+          {quickWinIds.size > 0 && (
+            <button
+              onClick={handleQuickWins}
+              className="px-3 py-1.5 rounded text-sm bg-green-500/10 border border-green-500/30 text-green-400 hover:bg-green-500/20 transition-colors"
+            >
+              Quick Wins ({quickWinIds.size})
+            </button>
+          )}
           <button
             onClick={onSelectAll}
             className="px-3 py-1.5 rounded text-sm bg-surface-raised border border-surface-border text-text hover:bg-surface-border/30 transition-colors"
@@ -213,6 +283,21 @@ function SelectPhase({
           >
             Clear
           </button>
+          <div className="ml-auto flex items-center gap-1">
+            {(['priority', 'automability', 'name'] as SortMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setSortMode(mode)}
+                className={`px-2 py-1 rounded text-[10px] font-mono transition-colors ${
+                  sortMode === mode
+                    ? 'bg-accent/20 text-accent'
+                    : 'text-text-muted hover:text-text'
+                }`}
+              >
+                {mode === 'automability' ? 'grade' : mode}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Bead list */}
@@ -240,6 +325,7 @@ function SelectPhase({
             {filtered.map((bead) => {
               const isReady = readySet.has(bead.id);
               const isSelected = selectedIds.has(bead.id);
+              const grade = bead.automabilityGrade;
               return (
                 <label
                   key={bead.id}
@@ -269,6 +355,16 @@ function SelectPhase({
                   >
                     {PRIORITY_LABEL[bead.priority] || 'P?'}
                   </span>
+                  {grade && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold flex-shrink-0 ${
+                        GRADE_COLOR[grade] || GRADE_COLOR.C
+                      }`}
+                      title={`Automability: ${bead.automabilityScore ?? '?'}/100`}
+                    >
+                      {grade}
+                    </span>
+                  )}
                   <span className="text-sm text-text truncate">{bead.subject}</span>
                   {!isReady && (
                     <span className="text-[10px] text-orange-400 flex-shrink-0">blocked</span>
