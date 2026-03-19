@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import type { DrainStatus, DrainPreview, DrainStartResult, DrainSummary, DrainDetail, PRStatus } from '../lib/types';
+import type { DrainStatus, DrainPreview, DrainStartResult, DrainSummary, DrainDetail, PRStatus, EpicBurnView } from '../lib/types';
 
 export function useDrainStatus(projectId: string) {
   return useQuery({
@@ -61,6 +61,9 @@ export function useStartDrain() {
       autoSelect?: boolean;
       maxAutoSelect?: number;
       maxJobs?: number;
+      minAutomability?: number;
+      parentBeadId?: string;
+      strategy?: 'priority' | 'automability';
     }) => {
       const { projectId, ...body } = input;
       const response = await api.post<DrainStartResult>(
@@ -145,6 +148,20 @@ export function useMergePR() {
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['drainPRStatuses', variables.projectId] });
     },
+  });
+}
+
+export function useEpicBurnView(projectId: string, parentBeadId: string | null) {
+  return useQuery({
+    queryKey: ['epicBurn', projectId, parentBeadId],
+    queryFn: async () => {
+      const response = await api.get<EpicBurnView>(
+        `/projects/${projectId}/burn/epic/${parentBeadId}`
+      );
+      if (!response.success) throw new Error(response.error);
+      return response.data!;
+    },
+    enabled: !!projectId && !!parentBeadId,
   });
 }
 

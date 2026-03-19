@@ -29,7 +29,7 @@ import {
   useMergePR,
   useUpdateChecklist,
 } from '../hooks/useDrain';
-import type { Bead, Job, DrainSummaryJob, PRStatus } from '../lib/types';
+import type { Bead, Job, DrainSummaryJob, PRStatus, EpicBurnPhase } from '../lib/types';
 
 // ---------- Constants ----------
 
@@ -158,6 +158,7 @@ function SelectPhase({
   onBegin,
   autoPickCount,
   isStarting,
+  onEpicBurn,
 }: {
   readyBeads: Bead[];
   allBeads: Bead[];
@@ -169,6 +170,7 @@ function SelectPhase({
   onBegin: () => void;
   autoPickCount: number;
   isStarting: boolean;
+  onEpicBurn: (parentId: string) => void;
 }) {
   const [filter, setFilter] = useState('');
   const [sortMode, setSortMode] = useState<SortMode>('priority');
@@ -227,6 +229,27 @@ function SelectPhase({
     }, 0);
   }, [quickWinIds, selectedIds, onClear, onToggle]);
 
+  // Epic burn: find parent beads with burnable children
+  const epicParents = useMemo(() => {
+    const parentMap = new Map<string, { parent: Bead; burnableChildren: number; totalChildren: number }>();
+    for (const bead of allBeads) {
+      if (bead.parentBeadId) {
+        const entry = parentMap.get(bead.parentBeadId) || {
+          parent: allBeads.find((b) => b.id === bead.parentBeadId)!,
+          burnableChildren: 0,
+          totalChildren: 0,
+        };
+        if (!entry.parent) continue;
+        entry.totalChildren++;
+        if (bead.status === 'pending' && bead.preInstructions) entry.burnableChildren++;
+        parentMap.set(bead.parentBeadId, entry);
+      }
+    }
+    return [...parentMap.values()]
+      .filter((e) => e.burnableChildren >= 2)
+      .sort((a, b) => b.burnableChildren - a.burnableChildren);
+  }, [allBeads]);
+
   // Suggestion panel
   const scoredCount = candidates.filter((b) => b.automabilityGrade).length;
   const avgScore = scoredCount > 0
@@ -252,6 +275,26 @@ function SelectPhase({
                 <span className="text-green-400 font-medium">{quickWinIds.size} quick wins</span>
               </>
             )}
+          </div>
+        )}
+
+        {/* Epic burn entries */}
+        {epicParents.length > 0 && (
+          <div className="mb-4 space-y-1">
+            <div className="text-[10px] font-mono text-text-muted uppercase tracking-wider mb-1">Epic Burns</div>
+            {epicParents.slice(0, 5).map((ep) => (
+              <button
+                key={ep.parent.id}
+                onClick={() => onEpicBurn(ep.parent.id)}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded bg-surface-raised border border-surface-border hover:border-accent/30 transition-colors text-left"
+              >
+                <Flame className="w-3.5 h-3.5 text-accent flex-shrink-0" />
+                <span className="text-sm text-text truncate flex-1">{ep.parent.subject}</span>
+                <span className="text-[10px] text-text-muted flex-shrink-0">
+                  {ep.burnableChildren}/{ep.totalChildren} ready
+                </span>
+              </button>
+            ))}
           </div>
         )}
 
@@ -1111,6 +1154,34 @@ export default function BurnPage() {
     }
   }, [phase, activeDrainId, jobs]);
 
+  // Epic burn — start drain scoped to a parent bead's children
+  const handleEpicBurn = useCallback(async (parentId: string) => {
+    if (!projectId) return;
+    try {
+      const result = await startDrain.mutateAsync({
+        projectId,
+        parentBeadId: parentId,
+        strategy: 'automability',
+      });
+      setBurnStartedAt(Date.now());
+      setSelectedIds(new Set());
+      setPhase('burning');
+      if (result.jobsCreated.length > 0) {
+        // Try to find drain ID from jobs
+        const findDrainId = () => {
+          const freshJobs = jobs || [];
+          const createdIds = new Set(result.jobsCreated);
+          const match = freshJobs.find((j) => createdIds.has(j.id) && j.drain_id);
+          if (match?.drain_id) setActiveDrainId(match.drain_id);
+        };
+        findDrainId();
+        setTimeout(findDrainId, 2000);
+      }
+    } catch (err) {
+      console.error('Failed to start epic burn:', err);
+    }
+  }, [projectId, startDrain, jobs]);
+
   // Abort
   const handleAbort = useCallback(async () => {
     if (!projectId) return;
@@ -1165,6 +1236,7 @@ export default function BurnPage() {
           onBegin={handleBegin}
           autoPickCount={preview?.count || 0}
           isStarting={startDrain.isPending}
+          onEpicBurn={handleEpicBurn}
         />
       )}
       {phase === 'burning' && (

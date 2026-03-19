@@ -197,3 +197,27 @@ export interface Drain {
 export interface DrainDetail extends Drain {
   jobs: Job[];
 }
+
+export interface EpicBurnPhase {
+  phase: number;
+  beads: {
+    id: string;
+    subject: string;
+    status: BeadStatus;
+    priority: number;
+    hasPreInstructions: boolean;
+    complexityScore?: number;
+    automabilityScore?: number;
+    automabilityGrade?: string;
+    blockedBy: string[];
+  }[];
+}
+
+export interface EpicBurnView {
+  parentBead: { id: string; subject: string; status: string };
+  totalChildren: number;
+  burnableCount: number;
+  completedCount: number;
+  avgAutomability: number;
+  phases: EpicBurnPhase[];
+}
